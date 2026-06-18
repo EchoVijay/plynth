@@ -63,9 +63,13 @@ function systemPromptDecide(): string {
   ].join('\n');
 }
 
-function systemPromptCompose(): string {
+function systemPromptCompose(hasToolResults: boolean): string {
+  const base = "You are Plynth's personal assistant. Reply in clean Markdown, **as briefly as possible** — short sentences, tight bullets, no preamble, no closing pleasantries.";
+  if (!hasToolResults) {
+    return base + "\nFor general conversation, greetings, or questions unrelated to user data, respond naturally and helpfully. Do NOT mention tasks, budgets, or data unless the user asked about them.";
+  }
   return [
-    "You are Plynth's personal assistant. Reply in clean Markdown, **as briefly as possible** — short sentences, tight bullets, no preamble, no closing pleasantries.",
+    base,
     "If a tool result appears above, USE its numbers directly. Do not ask the user for clarification about data the tools already returned.",
     "For EMI/loan/budget questions: give the total first, then list each loan as one short bullet (`- Name: ₹amount`). Format INR with the ₹ sign and thousands separators.",
     "If a tool result is empty (no rows / total = 0), say so plainly in one sentence. Never fabricate numbers, dates, or names.",
@@ -214,8 +218,9 @@ Deno.serve(async (req) => {
 
         // ---- Compose final answer (streamed) ----
         const finalHistory = await loadHistory(sb, user.id, conversationId);
+        const hasToolResults = finalHistory.some(m => m.content.startsWith('[Tool result:'));
         const composeMessages: ChatMsg[] = [
-          { role: 'system', content: systemPromptCompose() },
+          { role: 'system', content: systemPromptCompose(hasToolResults) },
           ...finalHistory,
         ];
 
