@@ -83,7 +83,7 @@ async function loadHistory(sb: ReturnType<typeof admin>, userId: string, convers
   const msgs: ChatMsg[] = [];
   for (const r of rows) {
     if (r.role === 'tool') {
-      msgs.push({ role: 'tool', content: `Tool ${r.tool_name} returned:\n${JSON.stringify(r.tool_output).slice(0, 4000)}` });
+      msgs.push({ role: 'user', content: `[Tool result: ${r.tool_name}]\n${JSON.stringify(r.tool_output).slice(0, 4000)}` });
     } else if (r.role === 'user' || r.role === 'assistant' || r.role === 'system') {
       msgs.push({ role: r.role, content: r.content });
     }
@@ -205,7 +205,7 @@ Deno.serve(async (req) => {
                 content: '', tool_name: parsed.tool, tool_input: parsed.args ?? {}, tool_output: result as object,
               });
               decideMessages.push({ role: 'assistant', content: JSON.stringify({ action: 'tool', tool: parsed.tool, args: parsed.args ?? {} }) });
-              decideMessages.push({ role: 'tool', content: `Tool ${parsed.tool} returned:\n${JSON.stringify(result).slice(0, 4000)}` });
+              decideMessages.push({ role: 'user', content: `[Tool result: ${parsed.tool}]\n${JSON.stringify(result).slice(0, 4000)}` });
               continue;
             }
             break; // action === 'final'
