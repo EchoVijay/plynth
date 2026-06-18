@@ -266,7 +266,7 @@ function ChatPane({ conversationId, onConversationCreated, onAfterTurn }: PanePr
       <header className="px-4 py-3 border-b flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-primary" />
         <h2 className="font-semibold">Plynth Assistant</h2>
-        <span className="ml-auto text-xs text-muted-foreground hidden sm:block">Powered by your local Ollama · unlimited &amp; free</span>
+        <span className="ml-auto text-xs text-muted-foreground hidden sm:block">Powered by Groq AI · free tier</span>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">

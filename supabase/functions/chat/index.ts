@@ -16,7 +16,7 @@
 //   { error: "..." }                         — fatal
 
 import { admin, json, corsHeaders, userFromAuth } from '../_shared/util.ts';
-import { ollamaChatJSON, ollamaChatStream, type ChatMsg } from '../_shared/ollama.ts';
+import { groqChatJSON, groqChatStream, type ChatMsg } from '../_shared/groq.ts';
 import { runTool, toolsCatalogText } from '../_shared/chat-tools.ts';
 
 const MAX_HISTORY = 8;
@@ -158,6 +158,7 @@ Deno.serve(async (req) => {
   const message: string = String(body.message || '').trim();
   if (!message) return json({ error: 'message required' }, 400);
 
+  try {
   const conversationId = await ensureConversation(sb, user.id, body.conversation_id, message);
 
   // persist user message
@@ -190,7 +191,7 @@ Deno.serve(async (req) => {
           ];
 
           for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
-            const raw = await ollamaChatJSON(decideMessages);
+            const raw = await groqChatJSON(decideMessages);
             const parsed = safeParseJSON<{ action: string; tool?: string; args?: Record<string, unknown> }>(raw) || { action: 'final' };
             if (parsed.action === 'tool' && parsed.tool) {
               send({ tool_call: { name: parsed.tool, args: parsed.args ?? {} } });
@@ -219,7 +220,7 @@ Deno.serve(async (req) => {
         ];
 
         let full = '';
-        for await (const delta of ollamaChatStream(composeMessages, { signal: req.signal })) {
+        for await (const delta of groqChatStream(composeMessages, { signal: req.signal })) {
           full += delta;
           send({ delta });
         }
@@ -248,4 +249,8 @@ Deno.serve(async (req) => {
       ...corsHeaders(),
     },
   });
+  } catch (e) {
+    console.error('Chat handler error:', e);
+    return json({ error: (e as Error).message || 'Unknown error' }, 500);
+  }
 });

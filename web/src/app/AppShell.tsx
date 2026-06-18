@@ -82,6 +82,7 @@ export function AppShell() {
           <Menu className="h-5 w-5" />
           {!collapsed && <span>Collapse</span>}
         </button>
+        {!collapsed && <span className="px-3 pb-2 text-[10px] text-muted-foreground/50">v{__APP_VERSION__}</span>}
       </motion.aside>
 
       <div className="flex-1 flex flex-col min-w-0">

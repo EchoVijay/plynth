@@ -20,3 +20,6 @@ supabase/.temp/
 
 .env.secrets
 web/.env
+
+# Local Netlify folder
+.netlify
