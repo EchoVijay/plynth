@@ -128,9 +128,16 @@ export async function groqChatJSON(messages: ChatMsg[], opts?: { model?: string;
 }
 
 /** Streaming chat. Yields token deltas (OpenAI SSE format). */
+export interface GroqRateLimit {
+  remainingRequests?: number;
+  limitRequests?: number;
+  remainingTokens?: number;
+  limitTokens?: number;
+}
+
 export async function* groqChatStream(
   messages: ChatMsg[],
-  opts?: { model?: string; timeoutMs?: number; signal?: AbortSignal },
+  opts?: { model?: string; timeoutMs?: number; signal?: AbortSignal; rateLimit?: GroqRateLimit },
 ): AsyncGenerator<string, void, unknown> {
   const key = await getSecret('GROQ_API_KEY');
   if (!key) throw new Error('GROQ_API_KEY not configured');
@@ -157,6 +164,13 @@ export async function* groqChatStream(
     if (!r.ok || !r.body) {
       const detail = r.body ? (await r.text()).slice(0, 400) : '';
       throw new Error(`Groq chat stream ${r.status}: ${detail}`);
+    }
+    // Capture rate-limit headers
+    if (opts?.rateLimit) {
+      opts.rateLimit.remainingRequests = Number(r.headers.get('x-ratelimit-remaining-requests')) || undefined;
+      opts.rateLimit.limitRequests = Number(r.headers.get('x-ratelimit-limit-requests')) || undefined;
+      opts.rateLimit.remainingTokens = Number(r.headers.get('x-ratelimit-remaining-tokens')) || undefined;
+      opts.rateLimit.limitTokens = Number(r.headers.get('x-ratelimit-limit-tokens')) || undefined;
     }
     const reader = r.body.getReader();
     const decoder = new TextDecoder();

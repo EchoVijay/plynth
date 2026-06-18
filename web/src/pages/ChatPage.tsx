@@ -129,6 +129,7 @@ function ChatPane({ conversationId, onConversationCreated, onAfterTurn }: PanePr
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
+  const [rateLimit, setRateLimit] = useState<{ remaining?: number; limit?: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Holds the persisted assistant message_id we are waiting to appear in
@@ -229,6 +230,10 @@ function ChatPane({ conversationId, onConversationCreated, onAfterTurn }: PanePr
           } else if (evt.error) {
             toast.error(evt.error);
           } else if (evt.done) {
+            // Capture rate limit info
+            if (evt.rate_limit) {
+              setRateLimit({ remaining: evt.rate_limit.remainingRequests, limit: evt.rate_limit.limitRequests });
+            }
             // Mark which persisted assistant id we're waiting for, then
             // refresh history. The effect above will clear `pending` only
             // after that message actually appears in the cache, preventing
@@ -266,7 +271,7 @@ function ChatPane({ conversationId, onConversationCreated, onAfterTurn }: PanePr
       <header className="px-4 py-3 border-b flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-primary" />
         <h2 className="font-semibold">Plynth Assistant</h2>
-        <span className="ml-auto text-xs text-muted-foreground hidden sm:block">Powered by Groq AI · free tier</span>
+        <span className="ml-auto text-xs text-muted-foreground hidden sm:block">Press Enter to send, Shift+Enter for newline</span>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -323,7 +328,12 @@ function ChatPane({ conversationId, onConversationCreated, onAfterTurn }: PanePr
             </Button>
           )}
         </form>
-        <p className="text-[10px] text-muted-foreground mt-1.5 text-center">Local AI · Read-only access to your data · Press Enter to send, Shift+Enter for newline</p>
+        <p className="text-[10px] text-muted-foreground mt-1.5 text-center flex items-center justify-center gap-2">
+          <span>Powered by Groq AI · free tier</span>
+          {rateLimit && (
+            <span className="text-muted-foreground/70">· {rateLimit.remaining}/{rateLimit.limit} requests remaining</span>
+          )}
+        </p>
       </footer>
     </section>
   );

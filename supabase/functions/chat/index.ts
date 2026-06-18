@@ -16,7 +16,7 @@
 //   { error: "..." }                         — fatal
 
 import { admin, json, corsHeaders, userFromAuth } from '../_shared/util.ts';
-import { groqChatJSON, groqChatStream, type ChatMsg } from '../_shared/groq.ts';
+import { groqChatJSON, groqChatStream, type ChatMsg, type GroqRateLimit } from '../_shared/groq.ts';
 import { runTool, toolsCatalogText } from '../_shared/chat-tools.ts';
 
 const MAX_HISTORY = 8;
@@ -225,7 +225,8 @@ Deno.serve(async (req) => {
         ];
 
         let full = '';
-        for await (const delta of groqChatStream(composeMessages, { signal: req.signal })) {
+        const rateLimit: GroqRateLimit = {};
+        for await (const delta of groqChatStream(composeMessages, { signal: req.signal, rateLimit })) {
           full += delta;
           send({ delta });
         }
@@ -236,7 +237,7 @@ Deno.serve(async (req) => {
         }).select('id').single();
 
         await bumpConversation(sb, conversationId);
-        send({ done: true, message_id: aMsg?.id });
+        send({ done: true, message_id: aMsg?.id, rate_limit: rateLimit });
       } catch (e) {
         send({ error: (e as Error).message });
       } finally {
