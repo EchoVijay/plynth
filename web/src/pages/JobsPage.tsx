@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { DndContext, type DragEndEvent, useDraggable, useDroppable } from '@dnd-kit/core';
-import { Plus, Briefcase, RefreshCw, ExternalLink, Trash2, Sparkles, Bookmark, BookmarkCheck } from 'lucide-react';
+import { Plus, Briefcase, RefreshCw, ExternalLink, Trash2, Sparkles, Bookmark, BookmarkCheck, StopCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 
 const STATUSES = ['applied', 'screening', 'interview', 'offer', 'rejected'] as const;
 type AppStatus = typeof STATUSES[number];
-const TABS = ['Browse', 'Saved', 'Applications', 'Settings'] as const;
+const TABS = ['Browse', 'Saved', 'Applications', 'Auto Apply', 'Settings'] as const;
 type Tab = typeof TABS[number];
 
 export function JobsPage() {
@@ -35,6 +35,7 @@ export function JobsPage() {
       {tab === 'Browse' && <BrowseTab />}
       {tab === 'Saved' && <SavedTab />}
       {tab === 'Applications' && <ApplicationsTab />}
+      {tab === 'Auto Apply' && <AutoApplyTab />}
       {tab === 'Settings' && <SettingsTab />}
     </div>
   );
@@ -436,5 +437,203 @@ function SettingsTab() {
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+// ===================== Auto Apply Tab =====================
+
+function AutoApplyTab() {
+  const { session } = useSession();
+  const userId = session?.user.id;
+  const qc = useQueryClient();
+  const [keywords, setKeywords] = useState('');
+  const [location, setLocation] = useState('');
+  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [maxApplies, setMaxApplies] = useState(25);
+
+  // LinkedIn config
+  const [linkedinEmail, setLinkedinEmail] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Load LinkedIn config
+  const configQ = useQuery({
+    queryKey: ['linkedin-config', userId],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data } = await supabase.from('linkedin_config').select('*').eq('user_id', userId!).maybeSingle();
+      return data;
+    },
+  });
+
+  useEffect(() => {
+    if (configQ.data) {
+      setLinkedinEmail(configQ.data.linkedin_email || '');
+    }
+  }, [configQ.data]);
+
+  // Bot runs history
+  const runsQ = useQuery({
+    queryKey: ['bot-runs', userId],
+    enabled: !!userId,
+    refetchInterval: 5000,
+    queryFn: async () => {
+      const { data } = await supabase.from('bot_runs').select('*').eq('user_id', userId!)
+        .order('created_at', { ascending: false }).limit(10);
+      return data ?? [];
+    },
+  });
+
+  const activeRun = (runsQ.data ?? []).find(r => r.status === 'running' || r.status === 'pending');
+
+  async function saveConfig() {
+    if (!userId) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('linkedin_config').upsert({
+        user_id: userId,
+        linkedin_email: linkedinEmail,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+      if (error) throw error;
+      toast.success('LinkedIn config saved');
+      qc.invalidateQueries({ queryKey: ['linkedin-config', userId] });
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  async function startBot() {
+    if (!userId) return;
+    if (!linkedinEmail) { toast.error('Configure your LinkedIn email first'); return; }
+    if (!keywords) { toast.error('Enter job keywords'); return; }
+    
+    const { error } = await supabase.from('bot_runs').insert({
+      user_id: userId,
+      command: 'start',
+      status: 'pending',
+      keywords,
+      location,
+      remote_only: remoteOnly,
+      max_applies: maxApplies,
+    });
+    if (error) { toast.error(error.message); return; }
+    toast.success('Bot run queued — the local bridge will pick it up');
+    qc.invalidateQueries({ queryKey: ['bot-runs', userId] });
+  }
+
+  async function stopBot() {
+    if (!userId || !activeRun) return;
+    await supabase.from('bot_runs').update({ command: 'stop', status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', activeRun.id);
+    toast.success('Stop signal sent');
+    qc.invalidateQueries({ queryKey: ['bot-runs', userId] });
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Config Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">LinkedIn Configuration</CardTitle>
+          <CardDescription>Your LinkedIn credentials. Password is stored only on your local machine (env var).</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-3 items-end">
+            <div className="flex-1 space-y-1.5">
+              <Label>LinkedIn Email</Label>
+              <Input value={linkedinEmail} onChange={e => setLinkedinEmail(e.target.value)} placeholder="your@email.com" />
+            </div>
+            <Button onClick={saveConfig} disabled={saving} size="sm">Save</Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Password is set as LINKEDIN_PASSWORD env var on the bot service (never stored in database).
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Launch Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Auto Apply to LinkedIn EasyApply Jobs</CardTitle>
+          <CardDescription>The bot runs on your local machine and applies to matching jobs automatically.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Job Keywords *</Label>
+              <Input value={keywords} onChange={e => setKeywords(e.target.value)} placeholder="e.g. DevOps Engineer" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Location</Label>
+              <Input value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. India" />
+            </div>
+          </div>
+          <div className="flex gap-4 items-center">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={remoteOnly} onChange={e => setRemoteOnly(e.target.checked)} className="rounded" />
+              Remote only
+            </label>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm">Max applies:</Label>
+              <Input type="number" value={maxApplies} onChange={e => setMaxApplies(Number(e.target.value))} className="w-20" min={1} max={50} />
+            </div>
+          </div>
+          <div className="flex gap-2 pt-2">
+            {activeRun ? (
+              <Button variant="outline" onClick={stopBot} className="text-destructive border-destructive">
+                <StopCircle className="h-4 w-4" /> Stop Bot
+              </Button>
+            ) : (
+              <Button onClick={startBot}>
+                <Sparkles className="h-4 w-4" /> Start Auto Apply
+              </Button>
+            )}
+            {activeRun && (
+              <Badge variant="outline" className="animate-pulse">
+                {activeRun.status === 'pending' ? 'Queued...' : `Running — ${activeRun.applied_count} applied`}
+              </Badge>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* History Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Run History</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {(runsQ.data ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No bot runs yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {(runsQ.data ?? []).map((run: any) => (
+                <div key={run.id} className="flex items-center gap-3 p-2 rounded-lg border text-sm">
+                  <Badge variant={run.status === 'completed' ? 'default' : run.status === 'failed' ? 'destructive' : 'outline'}>
+                    {run.status}
+                  </Badge>
+                  <span className="flex-1 truncate">{run.keywords} — {run.location || 'Any location'}</span>
+                  <span className="text-muted-foreground">{run.applied_count} applied</span>
+                  <span className="text-xs text-muted-foreground">{new Date(run.created_at).toLocaleDateString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Setup instructions */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Local Bot Setup</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground space-y-1">
+          <p>The bot runs locally on your machine (requires Chrome). To set it up:</p>
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Install: <code className="text-xs bg-muted px-1 rounded">cd linkedin-bot && pip install -r requirements-bridge.txt</code></li>
+            <li>Set env vars: <code className="text-xs bg-muted px-1 rounded">SUPABASE_URL</code>, <code className="text-xs bg-muted px-1 rounded">SUPABASE_SERVICE_ROLE_KEY</code>, <code className="text-xs bg-muted px-1 rounded">LINKEDIN_PASSWORD</code></li>
+            <li>Run: <code className="text-xs bg-muted px-1 rounded">python3 bot_bridge.py</code> (or enable the systemd service)</li>
+          </ol>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

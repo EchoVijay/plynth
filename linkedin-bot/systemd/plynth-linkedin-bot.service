@@ -1,0 +1,19 @@
+[Unit]
+Description=Plynth LinkedIn Auto-Apply Bot Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vijay
+WorkingDirectory=/home/vijay/plynth/linkedin-bot
+ExecStart=/home/vijay/plynth/linkedin-bot/venv/bin/python3 bot_bridge.py
+Restart=on-failure
+RestartSec=10
+
+Environment=SUPABASE_URL=https://wdhdcmqxwcrbmnjgjsqu.supabase.co
+Environment=SUPABASE_SERVICE_ROLE_KEY=
+Environment=LINKEDIN_PASSWORD=
+
+[Install]
+WantedBy=multi-user.target
