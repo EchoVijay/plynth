@@ -117,12 +117,13 @@ export const TOOLS: Tool[] = [
 
   {
     name: 'list_tasks',
-    description: "User's todos. Filter by status (pending|in_progress|completed) or due_window (today|overdue|week).",
+    description: "User's todos. Filter by status (pending|in_progress|completed) or due_window (today|overdue|week). By default returns all non-completed tasks.",
     args_schema: '{"status?":"pending|in_progress|completed", "due_window?":"today|overdue|week"}',
     run: async (sb, userId, args) => {
       const today = todayISO();
-      let q = sb.from('tasks').select('id,title,description,priority,status,due_date,category_id').eq('user_id', userId);
+      let q = sb.from('tasks').select('id,title,description,priority,status,due_date,category_id,task_categories(name)').eq('user_id', userId);
       if (args.status) q = q.eq('status', String(args.status));
+      else q = q.in('status', ['pending', 'in_progress']);
       if (args.due_window === 'today') q = q.eq('due_date', today);
       else if (args.due_window === 'overdue') q = q.lt('due_date', today).neq('status', 'completed');
       else if (args.due_window === 'week') q = q.gte('due_date', today).lte('due_date', shiftDays(today, 6));

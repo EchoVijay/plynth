@@ -58,7 +58,7 @@ function systemPromptDecide(): string {
     '  {"action":"tool","tool":"<name>","args":{...}}  OR  {"action":"final"}',
     "",
     "Pick a tool when the user asks about THEIR data (my/our/this month/today/EMI/loan/budget/expense/balance/task/learning/topic/job/profile).",
-    `Examples: "may EMI total"→{"action":"tool","tool":"get_finance_summary","args":{"year_month":"${now.getFullYear()}-05"}}; "active loans"→{"action":"tool","tool":"list_loans","args":{"status":"active"}}; "tasks today"→{"action":"tool","tool":"list_tasks","args":{"status":"pending","due_window":"today"}}.`,
+    `Examples: "may EMI total"→{"action":"tool","tool":"get_finance_summary","args":{"year_month":"${now.getFullYear()}-05"}}; "active loans"→{"action":"tool","tool":"list_loans","args":{"status":"active"}}; "my todos"→{"action":"tool","tool":"list_tasks","args":{}}; "tasks due today"→{"action":"tool","tool":"list_tasks","args":{"due_window":"today"}}; "overdue tasks"→{"action":"tool","tool":"list_tasks","args":{"due_window":"overdue"}}.`,
     'For general knowledge (definitions, code help, world facts) → {"action":"final"}.',
   ].join('\n');
 }
