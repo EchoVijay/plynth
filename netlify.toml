@@ -1,12 +1,10 @@
 [build]
   base    = "web"
-  command = "npm ci --include=dev && npm run build"
+  command = "corepack enable && pnpm install --frozen-lockfile && pnpm build"
   publish = "dist"
 
 [build.environment]
   NODE_VERSION = "20"
-  NPM_FLAGS    = "--include=dev"
-  NPM_CONFIG_PRODUCTION = "false"
 
 [[redirects]]
   from = "/*"
