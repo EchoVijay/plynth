@@ -153,7 +153,42 @@ export const TOOLS: Tool[] = [
       return { applications: apps, recent_listings: listings };
     },
   },
+
+  {
+    name: 'list_notes',
+    description: "User's notes: sections and recent pages with title and first ~200 chars of text content.",
+    args_schema: '{"section_name?":"string"}',
+    run: async (sb, userId, args) => {
+      const sections = await sb.from('note_sections').select('id,name,color').eq('user_id', userId).order('sort_order');
+      let pagesQ = sb.from('note_pages').select('id,title,section_id,content_json,updated_at').eq('user_id', userId);
+      if (args.section_name) {
+        const sec = (sections.data ?? []).find((s: any) => s.name.toLowerCase().includes(String(args.section_name).toLowerCase()));
+        if (sec) pagesQ = pagesQ.eq('section_id', sec.id);
+      }
+      const pages = await pagesQ.order('updated_at', { ascending: false }).limit(20);
+      const mapped = (pages.data ?? []).map((p: any) => {
+        let text = '';
+        try { text = extractText(p.content_json).slice(0, 200); } catch {}
+        const sec = (sections.data ?? []).find((s: any) => s.id === p.section_id);
+        return { id: p.id, title: p.title, section: sec?.name ?? '', snippet: text, updated_at: p.updated_at };
+      });
+      return { sections: sections.data ?? [], pages: mapped };
+    },
+  },
 ];
+
+function extractText(json: any): string {
+  if (!json || !json.content) return '';
+  const parts: string[] = [];
+  function walk(nodes: any[]) {
+    for (const n of nodes) {
+      if (n.type === 'text') parts.push(n.text ?? '');
+      if (n.content) walk(n.content);
+    }
+  }
+  walk(json.content);
+  return parts.join(' ');
+}
 
 export function toolsCatalogText(): string {
   return TOOLS.map((t) => `- ${t.name}(${t.args_schema}) — ${t.description}`).join('\n');
