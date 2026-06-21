@@ -210,6 +210,23 @@ export function SettingsPage() {
               }}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Documents Vault</p>
+              <p className="text-xs text-muted-foreground">Store and manage important documents securely</p>
+            </div>
+            <Switch
+              checked={profileQ.data?.enabled_pages?.documents_vault ?? false}
+              onCheckedChange={async (checked) => {
+                const current = profileQ.data?.enabled_pages ?? {};
+                const next = { ...current, documents_vault: checked };
+                await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
+                qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
+                qc.invalidateQueries({ queryKey: ['profile', userId] });
+                toast.success(checked ? 'Documents Vault enabled' : 'Documents Vault hidden');
+              }}
+            />
+          </div>
         </CardContent>
       </Card>
 
