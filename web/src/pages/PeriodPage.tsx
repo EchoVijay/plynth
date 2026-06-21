@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Heart, Droplets, ChevronLeft, ChevronRight, Plus, Calendar as CalIcon,
   Sparkles, Moon, Sun, Zap, Smile, Frown, Meh, CloudRain,
+  Trash2, Download, History, Edit2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -145,6 +146,90 @@ export function PeriodPage() {
       toast.success('Logged! 💕');
     },
   });
+
+  const deleteCycleM = useMutation({
+    mutationFn: async (cycleId: string) => {
+      const { error } = await supabase.from('period_cycles').delete().eq('id', cycleId).eq('user_id', userId!);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['period-cycles', userId] });
+      toast.success('Cycle deleted');
+    },
+  });
+
+  const deleteLogM = useMutation({
+    mutationFn: async (logId: string) => {
+      const { error } = await supabase.from('period_logs').delete().eq('id', logId).eq('user_id', userId!);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['period-log-day', userId, logDate] });
+      qc.invalidateQueries({ queryKey: ['period-logs', userId, calMonth.year, calMonth.month] });
+      toast.success('Log deleted');
+    },
+  });
+
+  // ---- Export helper ----
+  const handleExport = useCallback(async () => {
+    if (!userId) return;
+    const [{ data: allCycles }, { data: allLogs }] = await Promise.all([
+      supabase.from('period_cycles').select('*').eq('user_id', userId).order('start_date', { ascending: false }),
+      supabase.from('period_logs').select('*').eq('user_id', userId).order('log_date', { ascending: false }),
+    ]);
+
+    let content = '📅 PERIOD TRACKER — EXPORT\n';
+    content += '═'.repeat(50) + '\n\n';
+
+    // Cycles section
+    content += '🩸 CYCLES\n' + '─'.repeat(30) + '\n';
+    if (allCycles?.length) {
+      for (const c of allCycles) {
+        const start = new Date(c.start_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const end = c.end_date ? new Date(c.end_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Ongoing';
+        const len = c.cycle_length ? `${c.cycle_length} days` : '—';
+        content += `  ${start}  →  ${end}  (${len})\n`;
+      }
+    } else {
+      content += '  No cycles logged yet.\n';
+    }
+
+    // Daily logs section
+    content += '\n\n📝 DAILY LOGS\n' + '─'.repeat(30) + '\n';
+    if (allLogs?.length) {
+      for (const l of allLogs as DayLog[]) {
+        const date = new Date(l.log_date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        content += `\n  📆 ${date}\n`;
+        if (l.flow_intensity && l.flow_intensity !== 'none') content += `     Flow: ${l.flow_intensity}\n`;
+        if (l.mood?.length) content += `     Mood: ${l.mood.join(', ')}\n`;
+        const symptoms: string[] = [];
+        if (l.cramps > 0) symptoms.push('cramps');
+        if (l.bloating) symptoms.push('bloating');
+        if (l.headache) symptoms.push('headache');
+        if (l.breast_tenderness) symptoms.push('breast tenderness');
+        if (l.fatigue) symptoms.push('fatigue');
+        if (l.backache) symptoms.push('backache');
+        if (symptoms.length) content += `     Symptoms: ${symptoms.join(', ')}\n`;
+        if (l.energy_level) content += `     Energy: ${l.energy_level}/5\n`;
+        if (l.sleep_quality) content += `     Sleep: ${l.sleep_quality}/5\n`;
+        if (l.notes) content += `     Notes: ${l.notes}\n`;
+      }
+    } else {
+      content += '  No daily logs yet.\n';
+    }
+
+    content += '\n\n' + '═'.repeat(50) + '\n';
+    content += `Exported on ${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`;
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `period-tracker-export-${today()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Export downloaded! 📄');
+  }, [userId]);
 
   // ==================== Render ====================
   return (
@@ -306,11 +391,27 @@ export function PeriodPage() {
 
       {/* Daily Log */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <CalIcon className="h-4 w-4" /> Log for {new Date(logDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
-          </CardTitle>
-          <CardDescription>Track how you're feeling today</CardDescription>
+        <CardHeader className="flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <CalIcon className="h-4 w-4" /> Log for {new Date(logDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+            </CardTitle>
+            <CardDescription>Track how you're feeling</CardDescription>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setLogDate(d => addDays(d, -1))} className="p-1.5 rounded hover:bg-muted"><ChevronLeft className="h-4 w-4" /></button>
+            <button onClick={() => setLogDate(today())} className="px-2 py-1 rounded text-xs font-medium hover:bg-muted">Today</button>
+            <button onClick={() => setLogDate(d => addDays(d, 1))} className="p-1.5 rounded hover:bg-muted"><ChevronRight className="h-4 w-4" /></button>
+            {todayLogQ.data && (
+              <button
+                onClick={() => { if (confirm('Delete this log entry?')) deleteLogM.mutate(todayLogQ.data!.id); }}
+                className="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 ml-1"
+                title="Delete this log"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <DailyLogForm
@@ -334,6 +435,9 @@ export function PeriodPage() {
         <Button onClick={() => setShowLogPeriod(true)} variant="outline" className="text-rose-600 border-rose-200">
           <Droplets className="h-4 w-4" /> Log Period Start/End
         </Button>
+        <Button onClick={handleExport} variant="outline" className="text-violet-600 border-violet-200">
+          <Download className="h-4 w-4" /> Export Data
+        </Button>
       </div>
 
       {/* History */}
@@ -343,14 +447,76 @@ export function PeriodPage() {
           <CardContent>
             <div className="space-y-2">
               {cycles.slice(0, 6).map(c => (
-                <div key={c.id} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-muted">
+                <div key={c.id} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-muted group">
                   <span className="font-medium">
                     {new Date(c.start_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {c.end_date && ` → ${new Date(c.end_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
                   </span>
-                  <span className="text-muted-foreground">
-                    {c.end_date ? `${c.cycle_length} days` : 'Ongoing'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">
+                      {c.end_date ? `${c.cycle_length} days` : 'Ongoing'}
+                    </span>
+                    <button
+                      onClick={() => { if (confirm('Delete this cycle entry?')) deleteCycleM.mutate(c.id); }}
+                      className="p-1 rounded text-red-500 opacity-0 group-hover:opacity-100 hover:bg-red-50 dark:hover:bg-red-900/20 transition-opacity"
+                      title="Delete cycle"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Past Logs History */}
+      {logsQ.data && logsQ.data.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <History className="h-4 w-4 text-indigo-500" /> Recent Daily Logs
+            </CardTitle>
+            <CardDescription>Tap any date to view/edit that day's log</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {logsQ.data
+                .sort((a, b) => b.log_date.localeCompare(a.log_date))
+                .slice(0, 10)
+                .map(l => (
+                <button
+                  key={l.id}
+                  onClick={() => setLogDate(l.log_date)}
+                  className={cn(
+                    'w-full flex items-center justify-between text-sm p-2.5 rounded-lg border transition-all text-left',
+                    logDate === l.log_date ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-muted',
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground w-20">
+                      {new Date(l.log_date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {l.flow_intensity && l.flow_intensity !== 'none' && (
+                        <Badge variant="outline" className="text-xs text-rose-600 border-rose-200 bg-rose-50">
+                          {'💧'.repeat(FLOW_LEVELS.find(f => f.id === l.flow_intensity)?.drops ?? 1)}
+                        </Badge>
+                      )}
+                      {l.mood?.slice(0, 3).map(m => (
+                        <span key={m} className="text-sm">{MOODS.find(x => x.id === m)?.emoji}</span>
+                      ))}
+                      {(l.cramps > 0 || l.bloating || l.headache || l.fatigue || l.backache || l.breast_tenderness) && (
+                        <span className="text-xs text-orange-600">🤕</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {l.energy_level && <span className="text-xs text-muted-foreground">⚡{l.energy_level}</span>}
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  </div>
+                </button>
               ))}
             </div>
           </CardContent>
