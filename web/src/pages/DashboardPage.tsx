@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/Loader';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { formatINR } from '@/lib/utils';
+import { isPageEnabled } from '@/app/AppShell';
 
 const QUOTES = [
   'Small steps every day beat giant leaps once a year.',
@@ -22,9 +23,19 @@ export function DashboardPage() {
   const today = new Date().toISOString().slice(0, 10);
   const quote = QUOTES[new Date().getDate() % QUOTES.length];
 
+  const profileQ = useQuery({
+    queryKey: ['profile', userId],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data } = await supabase.from('profiles').select('enabled_pages').eq('user_id', userId!).maybeSingle();
+      return data;
+    },
+  });
+  const ep = profileQ.data?.enabled_pages;
+
   const learningQ = useQuery({
     queryKey: ['dashboard', 'learning', userId, today],
-    enabled: !!userId,
+    enabled: !!userId && isPageEnabled(ep, 'learning'),
     queryFn: async () => {
       const { data } = await supabase.from('learning_plans').select('id,status').eq('user_id', userId!).eq('date', today);
       return { total: data?.length ?? 0, done: data?.filter(d => d.status === 'completed').length ?? 0 };
@@ -33,7 +44,7 @@ export function DashboardPage() {
 
   const jobsQ = useQuery({
     queryKey: ['dashboard', 'jobs', userId],
-    enabled: !!userId,
+    enabled: !!userId && isPageEnabled(ep, 'jobs'),
     queryFn: async () => {
       const { count } = await supabase.from('job_listings').select('*', { count: 'exact', head: true }).eq('user_id', userId!).eq('is_new', true);
       return count ?? 0;
@@ -42,7 +53,7 @@ export function DashboardPage() {
 
   const tasksQ = useQuery({
     queryKey: ['dashboard', 'tasks', userId, today],
-    enabled: !!userId,
+    enabled: !!userId && isPageEnabled(ep, 'todos'),
     queryFn: async () => {
       const { data } = await supabase.from('tasks').select('id,status').eq('user_id', userId!).eq('due_date', today);
       return { total: data?.length ?? 0, done: data?.filter(t => t.status === 'completed').length ?? 0 };
@@ -51,7 +62,7 @@ export function DashboardPage() {
 
   const financeQ = useQuery({
     queryKey: ['dashboard', 'finance', userId],
-    enabled: !!userId,
+    enabled: !!userId && isPageEnabled(ep, 'finance'),
     queryFn: async () => {
       const { data } = await supabase.from('loans').select('emi_amount,emi_due_day,status').eq('user_id', userId!).eq('status', 'active');
       const totalEMI = (data ?? []).reduce((s, l) => s + Number(l.emi_amount), 0);
@@ -64,25 +75,31 @@ export function DashboardPage() {
     },
   });
 
-  const cards = [
+  const allCards = [
     {
-      to: '/learning', label: "Today's Learning", icon: BookOpen, gradient: 'from-violet-500 to-fuchsia-500',
+      key: 'learning', to: '/learning', label: "Today's Learning", icon: BookOpen, gradient: 'from-violet-500 to-fuchsia-500',
       value: learningQ.data ? `${learningQ.data.done} / ${learningQ.data.total}` : '—', sub: 'items completed',
+      loading: learningQ.isLoading,
     },
     {
-      to: '/jobs', label: 'New Jobs', icon: Briefcase, gradient: 'from-sky-500 to-cyan-500',
+      key: 'jobs', to: '/jobs', label: 'New Jobs', icon: Briefcase, gradient: 'from-sky-500 to-cyan-500',
       value: jobsQ.data?.toString() ?? '—', sub: 'fresh listings',
+      loading: jobsQ.isLoading,
     },
     {
-      to: '/todos', label: 'Tasks Due Today', icon: CheckSquare, gradient: 'from-emerald-500 to-teal-500',
+      key: 'todos', to: '/todos', label: 'Tasks Due Today', icon: CheckSquare, gradient: 'from-emerald-500 to-teal-500',
       value: tasksQ.data ? `${tasksQ.data.done} / ${tasksQ.data.total}` : '—', sub: 'completed',
+      loading: tasksQ.isLoading,
     },
     {
-      to: '/finance', label: 'Monthly EMI', icon: Wallet, gradient: 'from-amber-500 to-orange-500',
+      key: 'finance', to: '/finance', label: 'Monthly EMI', icon: Wallet, gradient: 'from-amber-500 to-orange-500',
       value: financeQ.data ? formatINR(financeQ.data.totalEMI) : '—',
       sub: financeQ.data?.nextDay ? `Next due: ${financeQ.data.nextDay}` : 'No active loans',
+      loading: financeQ.isLoading,
     },
   ];
+
+  const cards = allCards.filter(c => isPageEnabled(ep, c.key));
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -107,7 +124,7 @@ export function DashboardPage() {
                     <c.icon className="h-5 w-5" />
                   </div>
                   <p className="text-xs uppercase tracking-wider text-muted-foreground">{c.label}</p>
-                  {learningQ.isLoading || jobsQ.isLoading || tasksQ.isLoading || financeQ.isLoading
+                  {c.loading
                     ? <Skeleton className="h-8 w-24 mt-1" />
                     : <p className="text-2xl font-bold mt-1">{c.value}</p>}
                   <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">

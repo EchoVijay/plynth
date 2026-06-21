@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import {
   LayoutDashboard, BookOpen, Briefcase, CheckSquare, Wallet, Settings, MessageCircle,
   Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen, Heart, FileText, CalendarDays,
+  Bookmark,
 } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { cn, greeting } from '@/lib/utils';
@@ -12,23 +13,25 @@ import { useTheme } from './ThemeProvider';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useQuery } from '@tanstack/react-query';
 
-const NAV = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/learning', label: 'Learning', icon: BookOpen },
-  { to: '/jobs', label: 'Jobs', icon: Briefcase },
-  { to: '/todos', label: 'To-Do', icon: CheckSquare },
-  { to: '/notes', label: 'Notes', icon: NotebookPen },
-  { to: '/finance', label: 'Finance', icon: Wallet },
-  { to: '/chat', label: 'Chat', icon: MessageCircle },
-  { to: '/settings', label: 'Settings', icon: Settings },
+// All toggleable pages. Dashboard & Settings are pinned (always visible).
+export const ALL_PAGES: { key: string; to: string; label: string; icon: any; defaultEnabled: boolean }[] = [
+  { key: 'learning', to: '/learning', label: 'Learning', icon: BookOpen, defaultEnabled: true },
+  { key: 'jobs', to: '/jobs', label: 'Jobs', icon: Briefcase, defaultEnabled: true },
+  { key: 'todos', to: '/todos', label: 'To-Do', icon: CheckSquare, defaultEnabled: true },
+  { key: 'notes', to: '/notes', label: 'Notes', icon: NotebookPen, defaultEnabled: true },
+  { key: 'finance', to: '/finance', label: 'Finance', icon: Wallet, defaultEnabled: true },
+  { key: 'chat', to: '/chat', label: 'Chat', icon: MessageCircle, defaultEnabled: true },
+  { key: 'calendar', to: '/calendar', label: 'Calendar', icon: CalendarDays, defaultEnabled: false },
+  { key: 'period_tracker', to: '/period', label: 'Period', icon: Heart, defaultEnabled: false },
+  { key: 'documents_vault', to: '/documents', label: 'Docs', icon: FileText, defaultEnabled: false },
+  { key: 'bookmarks', to: '/bookmarks', label: 'Bookmarks', icon: Bookmark, defaultEnabled: false },
 ];
 
-// Pages that require opt-in via Settings > Page Visibility
-const CONDITIONAL_PAGES: Record<string, { to: string; label: string; icon: any; settingKey: string }> = {
-  period_tracker: { to: '/period', label: 'Period', icon: Heart, settingKey: 'period_tracker' },
-  documents_vault: { to: '/documents', label: 'Docs', icon: FileText, settingKey: 'documents_vault' },
-  calendar: { to: '/calendar', label: 'Calendar', icon: CalendarDays, settingKey: 'calendar' },
-};
+export function isPageEnabled(enabledPages: Record<string, boolean> | null | undefined, key: string): boolean {
+  const cfg = ALL_PAGES.find(p => p.key === key);
+  if (!cfg) return false;
+  return (enabledPages ?? {})[key] ?? cfg.defaultEnabled;
+}
 
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
@@ -50,18 +53,34 @@ export function AppShell() {
     if (session && profile === null) navigate('/onboarding', { replace: true });
   }, [session, profile, navigate]);
 
-  // Build nav items with conditional pages inserted
+  // Build nav: Dashboard (pinned first) + enabled pages in order + Settings (pinned last)
   const visibleNav = useMemo(() => {
-    const enabled = profile?.enabled_pages ?? {};
-    const extras = Object.entries(CONDITIONAL_PAGES)
-      .filter(([key]) => enabled[key])
-      .map(([, v]) => v);
-    // Insert conditional pages before Finance
-    const financeIdx = NAV.findIndex(n => n.to === '/finance');
-    const items = [...NAV];
-    items.splice(financeIdx, 0, ...extras);
-    return items;
-  }, [profile?.enabled_pages]);
+    const enabled = profile?.enabled_pages;
+    const order: string[] | null = profile?.page_order;
+
+    // Filter enabled pages
+    let pages = ALL_PAGES.filter(p => isPageEnabled(enabled, p.key));
+
+    // Apply custom order if set
+    if (order?.length) {
+      const ordered: typeof pages = [];
+      for (const key of order) {
+        const p = pages.find(pg => pg.key === key);
+        if (p) ordered.push(p);
+      }
+      // Append any pages not in the order list (newly added pages)
+      for (const p of pages) {
+        if (!ordered.some(o => o.key === p.key)) ordered.push(p);
+      }
+      pages = ordered;
+    }
+
+    return [
+      { key: '_dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard, defaultEnabled: true },
+      ...pages,
+      { key: '_settings', to: '/settings', label: 'Settings', icon: Settings, defaultEnabled: true },
+    ];
+  }, [profile?.enabled_pages, profile?.page_order]);
 
   const cycleTheme = () => setTheme(theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light');
 

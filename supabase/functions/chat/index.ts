@@ -17,10 +17,34 @@
 
 import { admin, json, corsHeaders, userFromAuth } from '../_shared/util.ts';
 import { groqChatJSON, groqChatStream, type ChatMsg, type GroqRateLimit } from '../_shared/groq.ts';
-import { runTool, toolsCatalogText } from '../_shared/chat-tools.ts';
+import { runTool, toolsCatalogText, toolsCatalogFiltered } from '../_shared/chat-tools.ts';
 
 const MAX_HISTORY = 8;
 const MAX_TOOL_LOOPS = 3;
+
+// Map tool names to the page key they belong to.
+// Tools NOT listed here are always available (e.g. get_profile).
+const TOOL_PAGE_MAP: Record<string, string> = {
+  get_finance_summary: 'finance',
+  list_loans: 'finance',
+  list_learning_topics: 'learning',
+  list_learning_plan_items: 'learning',
+  list_tasks: 'todos',
+  list_jobs: 'jobs',
+  get_period_info: 'period_tracker',
+  list_notes: 'notes',
+};
+
+// Default page visibility (matches ALL_PAGES in AppShell)
+const PAGE_DEFAULTS: Record<string, boolean> = {
+  learning: true, jobs: true, todos: true, notes: true,
+  finance: true, chat: true,
+  calendar: false, period_tracker: false, documents_vault: false, bookmarks: false,
+};
+
+function isEnabled(ep: Record<string, boolean> | null, key: string): boolean {
+  return (ep ?? {})[key] ?? PAGE_DEFAULTS[key] ?? false;
+}
 
 // Words that suggest the user is asking about their own Plynth data.
 // When NONE of these appear (and no tool result is already in history),
@@ -47,14 +71,14 @@ function sseLine(obj: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-function systemPromptDecide(): string {
+function systemPromptDecide(catalogText: string): string {
   const now = new Date();
   const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   return [
     `Today=${now.toISOString().slice(0, 10)} (year=${now.getFullYear()}, current_month=${ym}). Months: Jan=01..Dec=12.`,
     "You route a user message to ONE tool, or skip tools.",
     "Tools (user-scoped, read-only):",
-    toolsCatalogText(),
+    catalogText,
     "",
     'Reply with ONLY one JSON object, no prose, no fences:',
     '  {"action":"tool","tool":"<name>","args":{...}}  OR  {"action":"final"}',
@@ -167,6 +191,18 @@ Deno.serve(async (req) => {
   try {
   const conversationId = await ensureConversation(sb, user.id, body.conversation_id, message);
 
+  // Fetch enabled_pages to filter tools
+  const { data: profileRow } = await sb.from('profiles').select('enabled_pages').eq('user_id', user.id).maybeSingle();
+  const ep: Record<string, boolean> | null = (profileRow?.enabled_pages as Record<string, boolean>) ?? null;
+
+  // Build set of allowed tool names (always include tools not mapped to a page)
+  const allowedTools = new Set<string>();
+  for (const t of ['get_profile']) allowedTools.add(t); // always-on tools
+  for (const [toolName, pageKey] of Object.entries(TOOL_PAGE_MAP)) {
+    if (isEnabled(ep, pageKey)) allowedTools.add(toolName);
+  }
+  const catalogText = toolsCatalogFiltered(allowedTools);
+
   // persist user message
   const { data: userMsgRow } = await sb.from('chat_messages').insert({
     conversation_id: conversationId, user_id: user.id, role: 'user', content: message,
@@ -192,7 +228,7 @@ Deno.serve(async (req) => {
           // Decide turn only needs the latest user message — sending full
           // history slows prompt eval significantly on CPU.
           const decideMessages: ChatMsg[] = [
-            { role: 'system', content: systemPromptDecide() },
+            { role: 'system', content: systemPromptDecide(catalogText) },
             { role: 'user', content: message },
           ];
 
@@ -200,6 +236,8 @@ Deno.serve(async (req) => {
             const raw = await groqChatJSON(decideMessages);
             const parsed = safeParseJSON<{ action: string; tool?: string; args?: Record<string, unknown> }>(raw) || { action: 'final' };
             if (parsed.action === 'tool' && parsed.tool) {
+              // Guard: reject tool calls for disabled pages
+              if (!allowedTools.has(parsed.tool)) break;
               send({ tool_call: { name: parsed.tool, args: parsed.args ?? {} } });
               let result: unknown; let ok = true;
               try { result = await runTool(sb, user.id, parsed.tool, parsed.args ?? {}); }

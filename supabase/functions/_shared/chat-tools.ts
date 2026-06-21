@@ -237,6 +237,12 @@ export function toolsCatalogText(): string {
   return TOOLS.map((t) => `- ${t.name}(${t.args_schema}) — ${t.description}`).join('\n');
 }
 
+export function toolsCatalogFiltered(allowedTools: Set<string>): string {
+  return TOOLS.filter((t) => allowedTools.has(t.name))
+    .map((t) => `- ${t.name}(${t.args_schema}) — ${t.description}`)
+    .join('\n');
+}
+
 export async function runTool(sb: SupabaseClient, userId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) throw new Error(`Unknown tool: ${name}`);

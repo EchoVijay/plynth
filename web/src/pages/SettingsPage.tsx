@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Download, Send, Smartphone, Copy, X } from 'lucide-react';
+import { Plus, Trash2, Download, Send, Smartphone, Copy, X, ChevronUp, ChevronDown, GripVertical } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { useTheme } from '@/app/ThemeProvider';
 import { cn } from '@/lib/utils';
+import { ALL_PAGES, isPageEnabled } from '@/app/AppShell';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -190,60 +191,55 @@ export function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Page Visibility</CardTitle>
-          <CardDescription>Show or hide optional pages from your navigation.</CardDescription>
+          <CardDescription>Show or hide pages from your navigation.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Period Tracker</p>
-              <p className="text-xs text-muted-foreground">Cycle tracking, predictions, symptom logging</p>
-            </div>
-            <Switch
-              checked={profileQ.data?.enabled_pages?.period_tracker ?? false}
-              onCheckedChange={async (checked) => {
-                const current = profileQ.data?.enabled_pages ?? {};
-                const next = { ...current, period_tracker: checked };
-                await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
-                qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
-                qc.invalidateQueries({ queryKey: ['profile', userId] });
-                toast.success(checked ? 'Period Tracker enabled' : 'Period Tracker hidden');
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Documents Vault</p>
-              <p className="text-xs text-muted-foreground">Store and manage important documents securely</p>
-            </div>
-            <Switch
-              checked={profileQ.data?.enabled_pages?.documents_vault ?? false}
-              onCheckedChange={async (checked) => {
-                const current = profileQ.data?.enabled_pages ?? {};
-                const next = { ...current, documents_vault: checked };
-                await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
-                qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
-                qc.invalidateQueries({ queryKey: ['profile', userId] });
-                toast.success(checked ? 'Documents Vault enabled' : 'Documents Vault hidden');
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Calendar</p>
-              <p className="text-xs text-muted-foreground">Events, birthdays, reminders with email notifications</p>
-            </div>
-            <Switch
-              checked={profileQ.data?.enabled_pages?.calendar ?? false}
-              onCheckedChange={async (checked) => {
-                const current = profileQ.data?.enabled_pages ?? {};
-                const next = { ...current, calendar: checked };
-                await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
-                qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
-                qc.invalidateQueries({ queryKey: ['profile', userId] });
-                toast.success(checked ? 'Calendar enabled' : 'Calendar hidden');
-              }}
-            />
-          </div>
+          {ALL_PAGES.map(page => {
+            const Icon = page.icon;
+            const checked = isPageEnabled(profileQ.data?.enabled_pages, page.key);
+            return (
+              <div key={page.key} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm font-medium">{page.label}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {page.defaultEnabled ? 'Core' : 'Optional'} · {page.to}
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  checked={checked}
+                  onCheckedChange={async (val) => {
+                    const current = profileQ.data?.enabled_pages ?? {};
+                    const next = { ...current, [page.key]: val };
+                    await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
+                    qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
+                    qc.invalidateQueries({ queryKey: ['profile', userId] });
+                    toast.success(val ? `${page.label} enabled` : `${page.label} hidden`);
+                  }}
+                />
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Page Order</CardTitle>
+          <CardDescription>Reorder pages in your navigation. Dashboard & Settings are pinned.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PageReorder
+            enabledPages={profileQ.data?.enabled_pages}
+            pageOrder={profileQ.data?.page_order}
+            userId={userId!}
+            onSaved={() => {
+              qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
+              qc.invalidateQueries({ queryKey: ['profile', userId] });
+            }}
+          />
         </CardContent>
       </Card>
 
@@ -517,6 +513,66 @@ function ReminderRow({ row, onChange, onDelete, onTest, testing }: ReminderRowPr
           </div>
         </div>
       </fieldset>
+    </div>
+  );
+}
+
+// ==================== Page Reorder ====================
+function PageReorder({ enabledPages, pageOrder, userId, onSaved }: {
+  enabledPages: Record<string, boolean> | null | undefined;
+  pageOrder: string[] | null | undefined;
+  userId: string;
+  onSaved: () => void;
+}) {
+  // Build the ordered list of currently-enabled pages
+  const enabledList = ALL_PAGES.filter(p => isPageEnabled(enabledPages, p.key));
+  const ordered = (() => {
+    if (pageOrder?.length) {
+      const result: typeof enabledList = [];
+      for (const key of pageOrder) {
+        const p = enabledList.find(pg => pg.key === key);
+        if (p) result.push(p);
+      }
+      for (const p of enabledList) {
+        if (!result.some(r => r.key === p.key)) result.push(p);
+      }
+      return result;
+    }
+    return enabledList;
+  })();
+
+  const move = async (idx: number, dir: -1 | 1) => {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= ordered.length) return;
+    const keys = ordered.map(p => p.key);
+    [keys[idx], keys[newIdx]] = [keys[newIdx], keys[idx]];
+    await supabase.from('profiles').update({ page_order: keys }).eq('user_id', userId);
+    onSaved();
+    toast.success('Order updated');
+  };
+
+  if (!ordered.length) return <p className="text-sm text-muted-foreground">No pages enabled.</p>;
+
+  return (
+    <div className="space-y-1">
+      {ordered.map((page, i) => {
+        const Icon = page.icon;
+        return (
+          <div key={page.key} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted">
+            <GripVertical className="h-4 w-4 text-muted-foreground/40" />
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium flex-1">{page.label}</span>
+            <button onClick={() => move(i, -1)} disabled={i === 0}
+              className="p-1 rounded hover:bg-background disabled:opacity-30">
+              <ChevronUp className="h-4 w-4" />
+            </button>
+            <button onClick={() => move(i, 1)} disabled={i === ordered.length - 1}
+              className="p-1 rounded hover:bg-background disabled:opacity-30">
+              <ChevronDown className="h-4 w-4" />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
