@@ -262,6 +262,32 @@ export const TOOLS: Tool[] = [
       return { from: fromDate, to: toDate, total, count: expenses.length, by_category: byCategory, recent: expenses.slice(0, 20) };
     },
   },
+
+  {
+    name: 'get_focus_summary',
+    description: "Focus timer stats: today's sessions, 30-day totals, trees grown, total focus time.",
+    args_schema: '{}',
+    run: async (sb, userId) => {
+      const today = todayISO();
+      const since30 = shiftDays(today, -30);
+      const { data: todaySessions } = await sb.from('focus_sessions')
+        .select('tree_species,actual_seconds,status,mode')
+        .eq('user_id', userId).gte('started_at', today + 'T00:00:00');
+      const { data: monthlySessions } = await sb.from('focus_sessions')
+        .select('actual_seconds,status,started_at')
+        .eq('user_id', userId).eq('status', 'completed').gte('started_at', since30 + 'T00:00:00');
+      const ts = todaySessions ?? [];
+      const ms = monthlySessions ?? [];
+      const todayCompleted = ts.filter((s: any) => s.status === 'completed');
+      const todaySec = todayCompleted.reduce((s: number, r: any) => s + r.actual_seconds, 0);
+      const monthSec = ms.reduce((s: number, r: any) => s + r.actual_seconds, 0);
+      const uniqueDays = new Set(ms.map((s: any) => s.started_at.slice(0, 10))).size;
+      return {
+        today: { completed: todayCompleted.length, abandoned: ts.filter((s: any) => s.status === 'abandoned').length, focus_minutes: Math.round(todaySec / 60) },
+        last_30_days: { sessions: ms.length, focus_minutes: Math.round(monthSec / 60), active_days: uniqueDays },
+      };
+    },
+  },
 ];
 
 function extractText(json: any): string {

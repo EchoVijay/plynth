@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import {
   LayoutDashboard, BookOpen, Briefcase, CheckSquare, Wallet, Settings, MessageCircle,
   Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen, Heart, FileText, CalendarDays,
-  Bookmark, Flame,
+  Bookmark, Flame, Timer,
 } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { cn, greeting } from '@/lib/utils';
@@ -26,6 +26,7 @@ export const ALL_PAGES: { key: string; to: string; label: string; icon: any; def
   { key: 'documents_vault', to: '/documents', label: 'Docs', icon: FileText, defaultEnabled: false },
   { key: 'bookmarks', to: '/bookmarks', label: 'Bookmarks', icon: Bookmark, defaultEnabled: false },
   { key: 'habits', to: '/habits', label: 'Habits', icon: Flame, defaultEnabled: false },
+  { key: 'focus', to: '/focus', label: 'Focus', icon: Timer, defaultEnabled: false },
 ];
 
 export function isPageEnabled(enabledPages: Record<string, boolean> | null | undefined, key: string): boolean {

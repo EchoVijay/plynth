@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { BookOpen, Briefcase, CheckSquare, Wallet, ArrowRight, Sparkles, Flame, Receipt } from 'lucide-react';
+import { BookOpen, Briefcase, CheckSquare, Wallet, ArrowRight, Sparkles, Flame, Receipt, Timer } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Loader';
 import { supabase } from '@/lib/supabase';
@@ -110,6 +110,19 @@ export function DashboardPage() {
     },
   });
 
+  const focusQ = useQuery({
+    queryKey: ['dashboard', 'focus', userId, today],
+    enabled: !!userId && isPageEnabled(ep, 'focus'),
+    queryFn: async () => {
+      const { data } = await supabase.from('focus_sessions').select('actual_seconds,status')
+        .eq('user_id', userId!).eq('status', 'completed')
+        .gte('started_at', today + 'T00:00:00');
+      const sessions = data ?? [];
+      const totalSec = sessions.reduce((s, r) => s + r.actual_seconds, 0);
+      return { sessions: sessions.length, totalSec };
+    },
+  });
+
   const allCards = [
     {
       id: 'learning', pageKey: 'learning', to: '/learning', label: "Today's Learning", icon: BookOpen, gradient: 'from-violet-500 to-fuchsia-500',
@@ -143,6 +156,12 @@ export function DashboardPage() {
       value: expensesQ.data ? `₹${expensesQ.data.todayTotal.toLocaleString('en-IN')}` : '—',
       sub: expensesQ.data ? `₹${expensesQ.data.monthTotal.toLocaleString('en-IN')} this month` : '',
       loading: expensesQ.isLoading,
+    },
+    {
+      id: 'focus', pageKey: 'focus', to: '/focus', label: 'Focus Today', icon: Timer, gradient: 'from-indigo-500 to-purple-500',
+      value: focusQ.data ? `${focusQ.data.sessions} 🌳` : '—',
+      sub: focusQ.data ? `${Math.round(focusQ.data.totalSec / 60)}m focused` : '',
+      loading: focusQ.isLoading,
     },
   ];
 

@@ -334,6 +334,30 @@ async function handleHabit(sb: ReturnType<typeof admin>, userId: string, args: s
   return `${done ? '✅' : '⏳'} ${match.emoji} *${match.name}* — ${newCount}/${match.target_per_day}${done ? ' 🎉 Complete!' : ''}`;
 }
 
+async function handleFocus(sb: ReturnType<typeof admin>, userId: string): Promise<string> {
+  const d = today();
+  const { data } = await sb.from('focus_sessions').select('actual_seconds,status,tree_species')
+    .eq('user_id', userId).gte('started_at', d + 'T00:00:00');
+  const sessions = data ?? [];
+  const completed = sessions.filter((s: any) => s.status === 'completed');
+  const abandoned = sessions.filter((s: any) => s.status === 'abandoned');
+  const totalMin = Math.round(completed.reduce((s: number, r: any) => s + r.actual_seconds, 0) / 60);
+
+  if (!completed.length && !abandoned.length) return '🌳 No focus sessions today. Open Plynth to start one!';
+
+  const lines = ['🌳 *Focus Today*\n'];
+  lines.push(`✅ ${completed.length} completed · ${totalMin}m focused`);
+  if (abandoned.length) lines.push(`🥀 ${abandoned.length} abandoned`);
+  if (completed.length) {
+    lines.push('\n*Trees:*');
+    for (const s of completed) {
+      const min = Math.round(s.actual_seconds / 60);
+      lines.push(`  🌲 ${s.tree_species} — ${min}m`);
+    }
+  }
+  return lines.join('\n');
+}
+
 async function handleExpense(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
   if (!args) return '❌ Usage: `/expense 250 food Lunch at cafe`';
   const parts = args.split(/\s+/);
@@ -365,6 +389,7 @@ function helpText(): string {
     '`/task <title> [date] [priority]` — Add a task',
     '`/habit [name]` — Check-in a habit (or view all)',
     '`/expense <amount> [category] [note]` — Log expense',
+    '`/focus` — Today\'s focus sessions',
     '`/period start|end` — Log period',
     '`/bookmark <url> [title]` — Save bookmark',
     '`/event <date> [time] <title>` — Add calendar event',
@@ -443,6 +468,7 @@ Deno.serve(async (req) => {
         case 'emi': result = await handleEmi(sb, userId); break;
         case 'habit': result = await handleHabit(sb, userId, cmd.args); break;
         case 'expense': result = await handleExpense(sb, userId, cmd.args); break;
+        case 'focus': result = await handleFocus(sb, userId); break;
         case 'unlink': result = await handleUnlink(sb, chatId); break;
         default: result = `Unknown command: /${cmd.command}\nType /help for available commands.`;
       }

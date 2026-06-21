@@ -35,13 +35,14 @@ const TOOL_PAGE_MAP: Record<string, string> = {
   list_notes: 'notes',
   get_habits_today: 'habits',
   list_daily_expenses: 'finance',
+  get_focus_summary: 'focus',
 };
 
 // Default page visibility (matches ALL_PAGES in AppShell)
 const PAGE_DEFAULTS: Record<string, boolean> = {
   learning: true, jobs: true, todos: true, notes: true,
   finance: true, chat: true,
-  calendar: false, period_tracker: false, documents_vault: false, bookmarks: false,
+  calendar: false, period_tracker: false, documents_vault: false, bookmarks: false, focus: false,
 };
 
 function isEnabled(ep: Record<string, boolean> | null, key: string): boolean {
@@ -64,6 +65,7 @@ const USER_DATA_KEYWORDS = [
   'period', 'cycle', 'ovulation', 'fertile', 'menstrual', 'cramps',
   'habit', 'habits', 'streak', 'check-in', 'checkin',
   'expense', 'spent', 'spend', 'daily spend',
+  'focus', 'pomodoro', 'timer', 'tree', 'forest',
   'profile',
 ];
 function looksLikeUserData(text: string): boolean {
