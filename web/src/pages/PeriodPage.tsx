@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -73,6 +73,12 @@ export function PeriodPage() {
   const [logDate, setLogDate] = useState(today());
   const [showLogPeriod, setShowLogPeriod] = useState(false);
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() }; });
+  const logCardRef = useRef<HTMLDivElement | null>(null);
+
+  const goToLog = (date: string) => {
+    setLogDate(date);
+    setTimeout(() => logCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
 
   // ---- Queries ----
   const cyclesQ = useQuery({
@@ -390,7 +396,7 @@ export function PeriodPage() {
       </Card>
 
       {/* Daily Log */}
-      <Card>
+      <Card ref={logCardRef}>
         <CardHeader className="flex-row items-center justify-between">
           <div>
             <CardTitle className="text-base flex items-center gap-2">
@@ -488,7 +494,7 @@ export function PeriodPage() {
                 .map(l => (
                 <button
                   key={l.id}
-                  onClick={() => setLogDate(l.log_date)}
+                  onClick={() => goToLog(l.log_date)}
                   className={cn(
                     'w-full flex items-center justify-between text-sm p-2.5 rounded-lg border transition-all text-left',
                     logDate === l.log_date ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-muted',
