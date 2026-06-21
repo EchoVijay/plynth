@@ -227,6 +227,23 @@ export function SettingsPage() {
               }}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Calendar</p>
+              <p className="text-xs text-muted-foreground">Events, birthdays, reminders with email notifications</p>
+            </div>
+            <Switch
+              checked={profileQ.data?.enabled_pages?.calendar ?? false}
+              onCheckedChange={async (checked) => {
+                const current = profileQ.data?.enabled_pages ?? {};
+                const next = { ...current, calendar: checked };
+                await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
+                qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
+                qc.invalidateQueries({ queryKey: ['profile', userId] });
+                toast.success(checked ? 'Calendar enabled' : 'Calendar hidden');
+              }}
+            />
+          </div>
         </CardContent>
       </Card>
 

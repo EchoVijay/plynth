@@ -2,7 +2,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard, BookOpen, Briefcase, CheckSquare, Wallet, Settings, MessageCircle,
-  Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen, Heart, FileText,
+  Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen, Heart, FileText, CalendarDays,
 } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { cn, greeting } from '@/lib/utils';
@@ -27,6 +27,7 @@ const NAV = [
 const CONDITIONAL_PAGES: Record<string, { to: string; label: string; icon: any; settingKey: string }> = {
   period_tracker: { to: '/period', label: 'Period', icon: Heart, settingKey: 'period_tracker' },
   documents_vault: { to: '/documents', label: 'Docs', icon: FileText, settingKey: 'documents_vault' },
+  calendar: { to: '/calendar', label: 'Calendar', icon: CalendarDays, settingKey: 'calendar' },
 };
 
 export function AppShell() {
