@@ -316,6 +316,9 @@ export function FinancePage() {
         </CardContent>
       </Card>
 
+      {/* Daily Spend Tracker */}
+      <DailySpendSection userId={userId!} />
+
       {/* Expenses lists */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -642,5 +645,216 @@ function NewLoanForm({ onCreated }: { onCreated: () => void }) {
         <Button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Add loan'}</Button>
       </DialogFooter>
     </form>
+  );
+}
+
+// ==================== Daily Spend Tracker ====================
+const SPEND_CATS = [
+  { key: 'food', emoji: '🍔', label: 'Food' },
+  { key: 'transport', emoji: '🚗', label: 'Transport' },
+  { key: 'shopping', emoji: '🛒', label: 'Shopping' },
+  { key: 'bills', emoji: '💡', label: 'Bills' },
+  { key: 'health', emoji: '💊', label: 'Health' },
+  { key: 'entertainment', emoji: '🎬', label: 'Fun' },
+  { key: 'education', emoji: '📚', label: 'Edu' },
+  { key: 'other', emoji: '📦', label: 'Other' },
+] as const;
+
+type DailyExpense = { id: string; amount: number; category: string; description: string | null; expense_date: string; payment_method: string; created_at: string };
+
+function DailySpendSection({ userId }: { userId: string }) {
+  const qc = useQueryClient();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [amount, setAmount] = useState('');
+  const [category, setCategory] = useState('food');
+  const [desc, setDesc] = useState('');
+  const [expanded, setExpanded] = useState(true);
+
+  const monthStart = todayStr.slice(0, 8) + '01';
+
+  const dailyQ = useQuery({
+    queryKey: ['daily_expenses', userId, todayStr.slice(0, 7)],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data } = await supabase.from('daily_expenses').select('*')
+        .eq('user_id', userId).gte('expense_date', monthStart)
+        .order('expense_date', { ascending: false }).order('created_at', { ascending: false });
+      return (data ?? []) as DailyExpense[];
+    },
+  });
+
+  const todayExpenses = (dailyQ.data ?? []).filter(e => e.expense_date === todayStr);
+  const todayTotal = todayExpenses.reduce((s, e) => s + Number(e.amount), 0);
+  const monthTotal = (dailyQ.data ?? []).reduce((s, e) => s + Number(e.amount), 0);
+
+  const catBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of dailyQ.data ?? []) map[e.category] = (map[e.category] ?? 0) + Number(e.amount);
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [dailyQ.data]);
+  const maxCat = catBreakdown.length ? catBreakdown[0][1] : 1;
+
+  const addM = useMutation({
+    mutationFn: async () => {
+      const amt = parseFloat(amount);
+      if (!amt || amt <= 0) throw new Error('Enter a valid amount');
+      const { error } = await supabase.from('daily_expenses').insert({
+        user_id: userId, amount: amt, category, description: desc.trim() || null,
+        expense_date: todayStr, payment_method: 'upi',
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['daily_expenses', userId] });
+      setAmount(''); setDesc('');
+      toast.success('Expense logged');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const deleteM = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('daily_expenses').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['daily_expenses', userId] }),
+  });
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, DailyExpense[]>();
+    for (const e of (dailyQ.data ?? []).slice(0, 30)) {
+      const arr = map.get(e.expense_date) ?? [];
+      arr.push(e);
+      map.set(e.expense_date, arr);
+    }
+    return Array.from(map.entries());
+  }, [dailyQ.data]);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <span className="text-lg">💸</span> Daily Spend
+            </CardTitle>
+            <CardDescription>Quick-log your daily expenses.</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => setExpanded(!expanded)}>
+            {expanded ? 'Collapse' : 'Expand'}
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        {/* Quick Add */}
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-medium">₹</span>
+              <Input type="number" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
+                className="pl-7 text-lg font-semibold h-12" min={0} step={1}
+                onKeyDown={e => { if (e.key === 'Enter' && amount) addM.mutate(); }}
+              />
+            </div>
+            <motion.div whileTap={{ scale: 0.95 }}>
+              <Button className="h-12 px-5" onClick={() => addM.mutate()} disabled={!amount || addM.isPending}>
+                <Plus className="h-4 w-4" /> Add
+              </Button>
+            </motion.div>
+          </div>
+
+          {/* Category pills */}
+          <div className="flex flex-wrap gap-1.5">
+            {SPEND_CATS.map(c => (
+              <motion.button key={c.key} type="button" whileTap={{ scale: 0.9 }}
+                onClick={() => setCategory(c.key)}
+                className={cn('px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1',
+                  category === c.key
+                    ? 'bg-primary text-primary-foreground shadow-md shadow-primary/20 scale-105'
+                    : 'bg-muted hover:bg-muted/80'
+                )}>
+                <span>{c.emoji}</span> {c.label}
+              </motion.button>
+            ))}
+          </div>
+
+          <Input placeholder="What was it for? (optional)" value={desc} onChange={e => setDesc(e.target.value)}
+            className="text-sm h-8" onKeyDown={e => { if (e.key === 'Enter' && amount) addM.mutate(); }} />
+        </div>
+
+        {/* Today + Month summary */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border p-3">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider">Today</p>
+            <motion.p key={todayTotal} initial={{ scale: 1.1, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              className="text-xl font-bold mt-1">₹{todayTotal.toLocaleString('en-IN')}</motion.p>
+            <p className="text-xs text-muted-foreground mt-0.5">{todayExpenses.length} item{todayExpenses.length !== 1 ? 's' : ''}</p>
+          </div>
+          <div className="rounded-xl bg-gradient-to-br from-blue-500/10 to-blue-600/5 border p-3">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider">This Month</p>
+            <motion.p key={monthTotal} initial={{ scale: 1.1, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              className="text-xl font-bold mt-1">₹{monthTotal.toLocaleString('en-IN')}</motion.p>
+            <p className="text-xs text-muted-foreground mt-0.5">{(dailyQ.data ?? []).length} total</p>
+          </div>
+        </div>
+
+        {expanded && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-4 overflow-hidden">
+            {/* Category breakdown */}
+            {catBreakdown.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase">By category</p>
+                {catBreakdown.map(([cat, total]) => {
+                  const info = SPEND_CATS.find(c => c.key === cat);
+                  return (
+                    <div key={cat} className="flex items-center gap-2 text-sm">
+                      <span className="w-5 text-center">{info?.emoji ?? '📦'}</span>
+                      <span className="w-16 truncate text-xs">{info?.label ?? cat}</span>
+                      <div className="flex-1 h-2.5 bg-secondary rounded-full overflow-hidden">
+                        <motion.div initial={{ width: 0 }} animate={{ width: `${(total / maxCat) * 100}%` }}
+                          transition={{ duration: 0.5 }} className="h-full bg-primary rounded-full" />
+                      </div>
+                      <span className="text-xs font-medium w-16 text-right">₹{total.toLocaleString('en-IN')}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Recent grouped by date */}
+            {grouped.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase">Recent</p>
+                {grouped.slice(0, 5).map(([date, items]) => (
+                  <div key={date}>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">
+                      {date === todayStr ? 'Today' : new Date(date + 'T00:00').toLocaleDateString('en', { day: 'numeric', month: 'short', weekday: 'short' })}
+                    </p>
+                    <AnimatePresence initial={false}>
+                      {items.map(e => {
+                        const info = SPEND_CATS.find(c => c.key === e.category);
+                        return (
+                          <motion.div key={e.id} layout initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
+                            className="flex items-center gap-2 py-1.5 group">
+                            <span className="text-sm">{info?.emoji ?? '📦'}</span>
+                            <span className="flex-1 text-sm truncate">{e.description || info?.label || e.category}</span>
+                            <span className="text-sm font-semibold">₹{Number(e.amount).toLocaleString('en-IN')}</span>
+                            <button onClick={() => deleteM.mutate(e.id)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted">
+                              <Trash2 className="h-3 w-3 text-muted-foreground" />
+                            </button>
+                          </motion.div>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

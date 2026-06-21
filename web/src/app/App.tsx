@@ -13,6 +13,7 @@ import { DocumentsPage } from '@/pages/DocumentsPage';
 import { CalendarPage } from '@/pages/CalendarPage';
 import { FinancePage } from '@/pages/FinancePage';
 import { BookmarksPage } from '@/pages/BookmarksPage';
+import { HabitsPage } from '@/pages/HabitsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/finance" element={<FinancePage />} />
         <Route path="/bookmarks" element={<BookmarksPage />} />
+        <Route path="/habits" element={<HabitsPage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>

@@ -33,6 +33,8 @@ const TOOL_PAGE_MAP: Record<string, string> = {
   list_jobs: 'jobs',
   get_period_info: 'period_tracker',
   list_notes: 'notes',
+  get_habits_today: 'habits',
+  list_daily_expenses: 'finance',
 };
 
 // Default page visibility (matches ALL_PAGES in AppShell)
@@ -60,6 +62,8 @@ const USER_DATA_KEYWORDS = [
   'job', 'jobs', 'application', 'applications', 'interview', 'offer',
   'note', 'notes', 'notebook', 'section',
   'period', 'cycle', 'ovulation', 'fertile', 'menstrual', 'cramps',
+  'habit', 'habits', 'streak', 'check-in', 'checkin',
+  'expense', 'spent', 'spend', 'daily spend',
   'profile',
 ];
 function looksLikeUserData(text: string): boolean {

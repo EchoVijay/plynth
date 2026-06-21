@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { BookOpen, Briefcase, CheckSquare, Wallet, ArrowRight, Sparkles } from 'lucide-react';
+import { BookOpen, Briefcase, CheckSquare, Wallet, ArrowRight, Sparkles, Flame, Receipt } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Loader';
 import { supabase } from '@/lib/supabase';
@@ -75,31 +75,78 @@ export function DashboardPage() {
     },
   });
 
+  const habitsQ = useQuery({
+    queryKey: ['dashboard', 'habits', userId, today],
+    enabled: !!userId && isPageEnabled(ep, 'habits'),
+    queryFn: async () => {
+      const { data: habits } = await supabase.from('habits').select('id,frequency,custom_days,target_per_day')
+        .eq('user_id', userId!).eq('archived', false);
+      const dow = new Date().getDay();
+      const due = (habits ?? []).filter(h => {
+        if (h.frequency === 'daily') return true;
+        if (h.frequency === 'weekdays') return dow >= 1 && dow <= 5;
+        if (h.frequency === 'weekends') return dow === 0 || dow === 6;
+        return (h.custom_days ?? []).includes(dow);
+      });
+      const { data: checkins } = await supabase.from('habit_checkins').select('habit_id,count')
+        .eq('user_id', userId!).eq('check_date', today);
+      const done = due.filter(h => {
+        const c = (checkins ?? []).find(ci => ci.habit_id === h.id);
+        return (c?.count ?? 0) >= h.target_per_day;
+      }).length;
+      return { total: due.length, done };
+    },
+  });
+
+  const expensesQ = useQuery({
+    queryKey: ['dashboard', 'expenses', userId, today],
+    enabled: !!userId && isPageEnabled(ep, 'finance'),
+    queryFn: async () => {
+      const { data } = await supabase.from('daily_expenses').select('amount,expense_date')
+        .eq('user_id', userId!).gte('expense_date', today.slice(0, 8) + '01');
+      const todayTotal = (data ?? []).filter(e => e.expense_date === today).reduce((s, e) => s + Number(e.amount), 0);
+      const monthTotal = (data ?? []).reduce((s, e) => s + Number(e.amount), 0);
+      return { todayTotal, monthTotal };
+    },
+  });
+
   const allCards = [
     {
-      key: 'learning', to: '/learning', label: "Today's Learning", icon: BookOpen, gradient: 'from-violet-500 to-fuchsia-500',
+      id: 'learning', pageKey: 'learning', to: '/learning', label: "Today's Learning", icon: BookOpen, gradient: 'from-violet-500 to-fuchsia-500',
       value: learningQ.data ? `${learningQ.data.done} / ${learningQ.data.total}` : '—', sub: 'items completed',
       loading: learningQ.isLoading,
     },
     {
-      key: 'jobs', to: '/jobs', label: 'New Jobs', icon: Briefcase, gradient: 'from-sky-500 to-cyan-500',
+      id: 'jobs', pageKey: 'jobs', to: '/jobs', label: 'New Jobs', icon: Briefcase, gradient: 'from-sky-500 to-cyan-500',
       value: jobsQ.data?.toString() ?? '—', sub: 'fresh listings',
       loading: jobsQ.isLoading,
     },
     {
-      key: 'todos', to: '/todos', label: 'Tasks Due Today', icon: CheckSquare, gradient: 'from-emerald-500 to-teal-500',
+      id: 'todos', pageKey: 'todos', to: '/todos', label: 'Tasks Due Today', icon: CheckSquare, gradient: 'from-emerald-500 to-teal-500',
       value: tasksQ.data ? `${tasksQ.data.done} / ${tasksQ.data.total}` : '—', sub: 'completed',
       loading: tasksQ.isLoading,
     },
     {
-      key: 'finance', to: '/finance', label: 'Monthly EMI', icon: Wallet, gradient: 'from-amber-500 to-orange-500',
+      id: 'finance', pageKey: 'finance', to: '/finance', label: 'Monthly EMI', icon: Wallet, gradient: 'from-amber-500 to-orange-500',
       value: financeQ.data ? formatINR(financeQ.data.totalEMI) : '—',
       sub: financeQ.data?.nextDay ? `Next due: ${financeQ.data.nextDay}` : 'No active loans',
       loading: financeQ.isLoading,
     },
+    {
+      id: 'habits', pageKey: 'habits', to: '/habits', label: 'Habits Today', icon: Flame, gradient: 'from-pink-500 to-rose-500',
+      value: habitsQ.data ? `${habitsQ.data.done} / ${habitsQ.data.total}` : '—',
+      sub: habitsQ.data?.done === habitsQ.data?.total && habitsQ.data?.total ? '🔥 All done!' : 'completed',
+      loading: habitsQ.isLoading,
+    },
+    {
+      id: 'expenses', pageKey: 'finance', to: '/finance', label: 'Spent Today', icon: Receipt, gradient: 'from-green-500 to-emerald-500',
+      value: expensesQ.data ? `₹${expensesQ.data.todayTotal.toLocaleString('en-IN')}` : '—',
+      sub: expensesQ.data ? `₹${expensesQ.data.monthTotal.toLocaleString('en-IN')} this month` : '',
+      loading: expensesQ.isLoading,
+    },
   ];
 
-  const cards = allCards.filter(c => isPageEnabled(ep, c.key));
+  const cards = allCards.filter(c => isPageEnabled(ep, c.pageKey));
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -116,7 +163,7 @@ export function DashboardPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map((c, i) => (
-          <motion.div key={c.to} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
+          <motion.div key={c.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
             <Link to={c.to}>
               <Card className="h-full hover:shadow-md hover:-translate-y-0.5 transition-all">
                 <CardContent className="p-5">

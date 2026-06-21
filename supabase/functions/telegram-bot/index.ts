@@ -285,10 +285,86 @@ async function handleEmi(sb: ReturnType<typeof admin>, userId: string): Promise<
   return lines.join('\n');
 }
 
+async function handleHabit(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  if (!args) {
+    // Show today's habits status
+    const { data: habits } = await sb.from('habits').select('id,name,emoji,frequency,custom_days,target_per_day')
+      .eq('user_id', userId).eq('archived', false);
+    const dow = new Date().getDay();
+    const due = (habits ?? []).filter((h: any) => {
+      if (h.frequency === 'daily') return true;
+      if (h.frequency === 'weekdays') return dow >= 1 && dow <= 5;
+      if (h.frequency === 'weekends') return dow === 0 || dow === 6;
+      return (h.custom_days ?? []).includes(dow);
+    });
+    if (!due.length) return '🔥 No habits due today.';
+    const { data: checkins } = await sb.from('habit_checkins').select('habit_id,count')
+      .eq('user_id', userId).eq('check_date', today());
+    const lines = ['🔥 *Habits Today*\n'];
+    let doneCount = 0;
+    for (const h of due) {
+      const c = (checkins ?? []).find((ci: any) => ci.habit_id === h.id);
+      const count = c?.count ?? 0;
+      const done = count >= h.target_per_day;
+      if (done) doneCount++;
+      lines.push(`${done ? '✅' : '⬜'} ${h.emoji} ${h.name} (${count}/${h.target_per_day})`);
+    }
+    lines.push(`\n*${doneCount}/${due.length}* completed`);
+    return lines.join('\n');
+  }
+
+  // Check-in a habit by name match
+  const searchName = args.toLowerCase();
+  const { data: habits } = await sb.from('habits').select('id,name,emoji,target_per_day')
+    .eq('user_id', userId).eq('archived', false);
+  const match = (habits ?? []).find((h: any) => h.name.toLowerCase().includes(searchName));
+  if (!match) return `❌ No habit matching "${args}". Type \`/habit\` to see your habits.`;
+
+  // Upsert check-in
+  const d = today();
+  const { data: existing } = await sb.from('habit_checkins').select('id,count')
+    .eq('habit_id', match.id).eq('check_date', d).maybeSingle();
+  if (existing) {
+    await sb.from('habit_checkins').update({ count: existing.count + 1 }).eq('id', existing.id);
+  } else {
+    await sb.from('habit_checkins').insert({ habit_id: match.id, user_id: userId, check_date: d, count: 1 });
+  }
+  const newCount = (existing?.count ?? 0) + 1;
+  const done = newCount >= match.target_per_day;
+  return `${done ? '✅' : '⏳'} ${match.emoji} *${match.name}* — ${newCount}/${match.target_per_day}${done ? ' 🎉 Complete!' : ''}`;
+}
+
+async function handleExpense(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  if (!args) return '❌ Usage: `/expense 250 food Lunch at cafe`';
+  const parts = args.split(/\s+/);
+  const amount = parseFloat(parts[0]);
+  if (isNaN(amount) || amount <= 0) return '❌ First argument must be a positive number (amount).';
+
+  const validCats = ['food', 'transport', 'shopping', 'bills', 'health', 'entertainment', 'education', 'other'];
+  let category = 'other';
+  let descParts = parts.slice(1);
+
+  if (parts[1] && validCats.includes(parts[1].toLowerCase())) {
+    category = parts[1].toLowerCase();
+    descParts = parts.slice(2);
+  }
+  const description = descParts.join(' ') || null;
+
+  const { error } = await sb.from('daily_expenses').insert({
+    user_id: userId, amount, category, description, expense_date: today(), payment_method: 'upi',
+  });
+  if (error) return `❌ ${error.message}`;
+
+  const catEmoji: Record<string, string> = { food: '🍔', transport: '🚗', shopping: '🛒', bills: '💡', health: '💊', entertainment: '🎬', education: '📚', other: '📦' };
+  return `✅ ${catEmoji[category] ?? '📦'} ₹${amount.toLocaleString('en-IN')} — ${description ?? category}`;
+}
+
 function helpText(): string {
   return [
     '🤖 *Plynth Bot Commands*\n',
     '`/task <title> [date] [priority]` — Add a task',
+    '`/habit [name]` — Check-in a habit (or view all)',
+    '`/expense <amount> [category] [note]` — Log expense',
     '`/period start|end` — Log period',
     '`/bookmark <url> [title]` — Save bookmark',
     '`/event <date> [time] <title>` — Add calendar event',
@@ -365,6 +441,8 @@ Deno.serve(async (req) => {
         case 'event': result = await handleEvent(sb, userId, cmd.args); break;
         case 'today': result = await handleToday(sb, userId); break;
         case 'emi': result = await handleEmi(sb, userId); break;
+        case 'habit': result = await handleHabit(sb, userId, cmd.args); break;
+        case 'expense': result = await handleExpense(sb, userId, cmd.args); break;
         case 'unlink': result = await handleUnlink(sb, chatId); break;
         default: result = `Unknown command: /${cmd.command}\nType /help for available commands.`;
       }

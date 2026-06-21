@@ -218,6 +218,50 @@ export const TOOLS: Tool[] = [
       return { sections: sections.data ?? [], pages: mapped };
     },
   },
+
+  {
+    name: 'get_habits_today',
+    description: "Today's habits: which are due, completed count, and current streaks.",
+    args_schema: '{}',
+    run: async (sb, userId) => {
+      const today = todayISO();
+      const { data: habits } = await sb.from('habits').select('id,name,emoji,frequency,custom_days,target_per_day')
+        .eq('user_id', userId).eq('archived', false);
+      const dow = new Date().getDay();
+      const due = (habits ?? []).filter((h: any) => {
+        if (h.frequency === 'daily') return true;
+        if (h.frequency === 'weekdays') return dow >= 1 && dow <= 5;
+        if (h.frequency === 'weekends') return dow === 0 || dow === 6;
+        return (h.custom_days ?? []).includes(dow);
+      });
+      const { data: checkins } = await sb.from('habit_checkins').select('habit_id,count')
+        .eq('user_id', userId).eq('check_date', today);
+      const result = due.map((h: any) => {
+        const c = (checkins ?? []).find((ci: any) => ci.habit_id === h.id);
+        return { name: h.name, emoji: h.emoji, target: h.target_per_day, done: c?.count ?? 0, completed: (c?.count ?? 0) >= h.target_per_day };
+      });
+      return { date: today, total_due: due.length, completed: result.filter((r: any) => r.completed).length, habits: result };
+    },
+  },
+
+  {
+    name: 'list_daily_expenses',
+    description: "Daily expenses for a date range. Defaults to current month if no range given.",
+    args_schema: '{"from_date?":"YYYY-MM-DD","to_date?":"YYYY-MM-DD"}',
+    run: async (sb, userId, args) => {
+      const today = todayISO();
+      const fromDate = (args.from_date as string) || today.slice(0, 8) + '01';
+      const toDate = (args.to_date as string) || today;
+      const { data } = await sb.from('daily_expenses').select('amount,category,description,expense_date,payment_method')
+        .eq('user_id', userId).gte('expense_date', fromDate).lte('expense_date', toDate)
+        .order('expense_date', { ascending: false }).limit(100);
+      const expenses = data ?? [];
+      const total = expenses.reduce((s: number, e: any) => s + Number(e.amount), 0);
+      const byCategory: Record<string, number> = {};
+      for (const e of expenses) byCategory[e.category] = (byCategory[e.category] ?? 0) + Number(e.amount);
+      return { from: fromDate, to: toDate, total, count: expenses.length, by_category: byCategory, recent: expenses.slice(0, 20) };
+    },
+  },
 ];
 
 function extractText(json: any): string {
