@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Download, Send, Smartphone, Copy, X, ChevronUp, ChevronDown, GripVertical } from 'lucide-react';
+import { Plus, Trash2, Download, Send, Smartphone, Copy, X, ChevronUp, ChevronDown, GripVertical, MessageCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -330,6 +330,8 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      <TelegramCard userId={userId!} chatId={profileQ.data?.telegram_chat_id} onLinked={() => qc.invalidateQueries({ queryKey: ['profile-settings', userId] })} />
+
       <Card>
         <CardHeader><CardTitle>API keys</CardTitle><CardDescription>Stored in Supabase Vault, set via CLI by admin. Read-only here.</CardDescription></CardHeader>
         <CardContent className="space-y-2">
@@ -477,7 +479,7 @@ function ReminderRow({ row, onChange, onDelete, onTest, testing }: ReminderRowPr
           </div>
           <div className="space-y-1"><Label className="text-xs">Channel</Label>
             <select value={local.channel} onChange={(e) => patch({ channel: e.target.value }, true)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm disabled:opacity-50">
-              <option value="email">Email</option><option value="ntfy">Push (ntfy)</option><option value="both">Both</option>
+              <option value="email">Email</option><option value="ntfy">Push (ntfy)</option><option value="telegram">Telegram</option><option value="both">Email + ntfy</option><option value="all">All channels</option>
             </select>
           </div>
         </div>
@@ -514,6 +516,82 @@ function ReminderRow({ row, onChange, onDelete, onTest, testing }: ReminderRowPr
         </div>
       </fieldset>
     </div>
+  );
+}
+
+// ==================== Telegram Link ====================
+function TelegramCard({ userId, chatId, onLinked }: { userId: string; chatId?: number | null; onLinked: () => void }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+
+  async function generateCode() {
+    setGenerating(true);
+    try {
+      // Generate 6-char random code
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let c = '';
+      for (let i = 0; i < 6; i++) c += chars[Math.floor(Math.random() * chars.length)];
+      // Store in system_kv with service role (via RPC or direct insert)
+      const { error } = await supabase.from('system_kv').upsert({
+        key: `tg_link_${c}`,
+        value: userId,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      setCode(c);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function unlinkTelegram() {
+    const { error } = await supabase.from('profiles').update({ telegram_chat_id: null }).eq('user_id', userId);
+    if (error) return toast.error(error.message);
+    toast.success('Telegram unlinked');
+    onLinked();
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><MessageCircle className="h-5 w-5" /> Telegram Bot</CardTitle>
+        <CardDescription>Link your Telegram account to add tasks, bookmarks, events and receive notifications via Telegram.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {chatId ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Badge variant="default">Linked</Badge>
+              <span className="text-sm text-muted-foreground">Chat ID: {chatId}</span>
+            </div>
+            <Button variant="outline" size="sm" onClick={unlinkTelegram}>Unlink Telegram</Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              1. Open <a href="https://t.me/PlynthBot" target="_blank" rel="noreferrer" className="underline text-primary">@PlynthBot</a> in Telegram<br />
+              2. Generate a link code below<br />
+              3. Send <code>/link CODE</code> to the bot
+            </p>
+            {code ? (
+              <div className="flex items-center gap-2">
+                <code className="px-3 py-2 rounded bg-muted border text-lg font-mono tracking-widest">{code}</code>
+                <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(`/link ${code}`); toast.success('Copied'); }}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-xs text-muted-foreground">Expires in 5 min</span>
+              </div>
+            ) : (
+              <Button onClick={generateCode} disabled={generating}>
+                {generating ? 'Generating...' : 'Generate Link Code'}
+              </Button>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

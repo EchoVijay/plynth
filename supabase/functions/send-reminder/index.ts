@@ -6,6 +6,7 @@
 import { admin, json, corsHeaders, getSecret } from '../_shared/util.ts';
 import { sendMail } from '../_shared/mail.ts';
 import { pushNtfy } from '../_shared/ntfy.ts';
+import { sendTelegram } from '../_shared/telegram.ts';
 import { renderDigestEmail, type MailSection } from '../_shared/mail-template.ts';
 
 const GRACE_MIN = 30; // fire if scheduled time is within the last 30 min AND hasn't fired today (dedup ensures single fire)
@@ -89,12 +90,12 @@ interface ReminderRow {
   id: string;
   user_id: string;
   category: string;
-  channel: 'email' | 'ntfy' | 'both';
+  channel: 'email' | 'ntfy' | 'telegram' | 'both' | 'all';
   time_of_day: string;
   times_of_day: string[];
   days_of_week: number[];
   enabled: boolean;
-  profiles?: { email?: string; full_name?: string; timezone?: string; ntfy_topic?: string };
+  profiles?: { email?: string; full_name?: string; timezone?: string; ntfy_topic?: string; telegram_chat_id?: number };
 }
 
 async function dispatchOne(
@@ -122,12 +123,12 @@ async function dispatchOne(
 
   let channel = 'none';
   let ok = false;
-  if ((r.channel === 'email' || r.channel === 'both') && r.profiles?.email) {
+  if ((r.channel === 'email' || r.channel === 'both' || r.channel === 'all') && r.profiles?.email) {
     const m = await sendMail({ to: r.profiles.email, subject, html, user_id: r.user_id });
     channel = m.channel;
     ok = m.ok || ok;
   }
-  if (r.channel === 'ntfy' || r.channel === 'both') {
+  if (r.channel === 'ntfy' || r.channel === 'both' || r.channel === 'all') {
     const sent = await pushNtfy({
       title: subject,
       message: text.slice(0, 280),
@@ -137,6 +138,11 @@ async function dispatchOne(
       click: appUrl,
     });
     if (sent) { channel = channel === 'none' ? 'ntfy' : channel + '+ntfy'; ok = ok || sent; }
+  }
+  if ((r.channel === 'telegram' || r.channel === 'all') && r.profiles?.telegram_chat_id) {
+    const tgText = `🔔 *${subject}*\n\n${text.slice(0, 3800)}`;
+    const sent = await sendTelegram(r.profiles.telegram_chat_id, tgText);
+    if (sent) { channel = channel === 'none' ? 'telegram' : channel + '+telegram'; ok = ok || sent; }
   }
 
   // Log the fire (idempotent — primary key prevents duplicates)
@@ -161,7 +167,7 @@ Deno.serve(async (req) => {
   if (testId) {
     const { data: r, error } = await sb.from('reminder_settings').select('*').eq('id', testId).maybeSingle();
     if (error || !r) return json({ ok: false, error: error?.message ?? 'reminder not found' }, 404);
-    const { data: prof } = await sb.from('profiles').select('email,full_name,timezone,ntfy_topic').eq('user_id', r.user_id).maybeSingle();
+    const { data: prof } = await sb.from('profiles').select('email,full_name,timezone,ntfy_topic,telegram_chat_id').eq('user_id', r.user_id).maybeSingle();
     const row = { ...(r as any), profiles: prof ?? {} } as ReminderRow;
     const now = new Date();
     const fireFor = now.toISOString().slice(0, 10);
@@ -183,7 +189,7 @@ Deno.serve(async (req) => {
   const { data: rules } = await sb.from('reminder_settings').select('*').eq('enabled', true);
   const userIds = Array.from(new Set((rules ?? []).map((r) => r.user_id)));
   const { data: profs } = userIds.length
-    ? await sb.from('profiles').select('user_id,email,full_name,timezone,ntfy_topic').in('user_id', userIds)
+    ? await sb.from('profiles').select('user_id,email,full_name,timezone,ntfy_topic,telegram_chat_id').in('user_id', userIds)
     : { data: [] };
   const profMap = new Map<string, any>((profs ?? []).map((p: any) => [p.user_id, p]));
 
