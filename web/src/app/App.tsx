@@ -8,6 +8,7 @@ import { LearningPage } from '@/pages/LearningPage';
 import { JobsPage } from '@/pages/JobsPage';
 import { TodosPage } from '@/pages/TodosPage';
 import { NotesPage } from '@/pages/NotesPage';
+import { PeriodPage } from '@/pages/PeriodPage';
 import { FinancePage } from '@/pages/FinancePage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ChatPage } from '@/pages/ChatPage';
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/jobs" element={<JobsPage />} />
         <Route path="/todos" element={<TodosPage />} />
         <Route path="/notes" element={<NotesPage />} />
+        <Route path="/period" element={<PeriodPage />} />
         <Route path="/finance" element={<FinancePage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/settings" element={<SettingsPage />} />

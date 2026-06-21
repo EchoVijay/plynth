@@ -155,6 +155,49 @@ export const TOOLS: Tool[] = [
   },
 
   {
+    name: 'get_period_info',
+    description: "Period tracker: current cycle phase, next period prediction, recent symptoms. Only works if user has enabled period tracking.",
+    args_schema: '{}',
+    run: async (sb, userId) => {
+      const { data: cycles } = await sb.from('period_cycles').select('*').eq('user_id', userId).order('start_date', { ascending: false }).limit(12);
+      if (!cycles?.length) return { enabled: false, message: 'No period data logged yet.' };
+      const sorted = [...cycles].sort((a: any, b: any) => a.start_date.localeCompare(b.start_date));
+      const lengths: number[] = [];
+      for (let i = 1; i < sorted.length; i++) {
+        const len = Math.round((new Date(sorted[i].start_date).getTime() - new Date(sorted[i-1].start_date).getTime()) / 86400000);
+        if (len > 15 && len < 60) lengths.push(len);
+      }
+      const avgCycle = lengths.length ? Math.round(lengths.reduce((s, l) => s + l, 0) / lengths.length) : 28;
+      const last = cycles[0];
+      const today = new Date().toISOString().slice(0, 10);
+      const dayInCycle = Math.round((new Date(today).getTime() - new Date(last.start_date).getTime()) / 86400000) + 1;
+      const periodLen = 5;
+      const ovDay = avgCycle - 14;
+      let phase = 'luteal';
+      if (dayInCycle <= periodLen) phase = 'menstrual';
+      else if (dayInCycle <= ovDay - 2) phase = 'follicular';
+      else if (dayInCycle <= ovDay + 1) phase = 'ovulatory';
+      const nextStart = new Date(new Date(last.start_date).getTime() + avgCycle * 86400000).toISOString().slice(0, 10);
+      const fertileStart = new Date(new Date(last.start_date).getTime() + (ovDay - 4) * 86400000).toISOString().slice(0, 10);
+      const fertileEnd = new Date(new Date(last.start_date).getTime() + (ovDay + 1) * 86400000).toISOString().slice(0, 10);
+      // Recent logs
+      const { data: logs } = await sb.from('period_logs').select('log_date,flow_intensity,mood,energy_level')
+        .eq('user_id', userId).order('log_date', { ascending: false }).limit(5);
+      return {
+        enabled: true,
+        current_phase: phase,
+        day_in_cycle: dayInCycle,
+        avg_cycle_length: avgCycle,
+        next_period_start: nextStart,
+        fertile_window: { start: fertileStart, end: fertileEnd },
+        ovulation_day: new Date(new Date(last.start_date).getTime() + ovDay * 86400000).toISOString().slice(0, 10),
+        last_period_start: last.start_date,
+        recent_logs: logs ?? [],
+      };
+    },
+  },
+
+  {
     name: 'list_notes',
     description: "User's notes: sections and recent pages with title and first ~200 chars of text content.",
     args_schema: '{"section_name?":"string"}',

@@ -189,6 +189,32 @@ export function SettingsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Page Visibility</CardTitle>
+          <CardDescription>Show or hide optional pages from your navigation.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Period Tracker</p>
+              <p className="text-xs text-muted-foreground">Cycle tracking, predictions, symptom logging</p>
+            </div>
+            <Switch
+              checked={profileQ.data?.enabled_pages?.period_tracker ?? false}
+              onCheckedChange={async (checked) => {
+                const current = profileQ.data?.enabled_pages ?? {};
+                const next = { ...current, period_tracker: checked };
+                await supabase.from('profiles').update({ enabled_pages: next }).eq('user_id', userId!);
+                qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
+                qc.invalidateQueries({ queryKey: ['profile', userId] });
+                toast.success(checked ? 'Period Tracker enabled' : 'Period Tracker hidden');
+              }}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Learning</CardTitle>
           <CardDescription>Controls how AI builds your daily study plan.</CardDescription>
         </CardHeader>

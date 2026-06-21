@@ -2,9 +2,9 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard, BookOpen, Briefcase, CheckSquare, Wallet, Settings, MessageCircle,
-  Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen,
+  Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen, Heart,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { cn, greeting } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { useSession } from './useSession';
@@ -22,6 +22,11 @@ const NAV = [
   { to: '/chat', label: 'Chat', icon: MessageCircle },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
+
+// Pages that require opt-in via Settings > Page Visibility
+const CONDITIONAL_PAGES: Record<string, { to: string; label: string; icon: any; settingKey: string }> = {
+  period_tracker: { to: '/period', label: 'Period', icon: Heart, settingKey: 'period_tracker' },
+};
 
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
@@ -43,6 +48,19 @@ export function AppShell() {
     if (session && profile === null) navigate('/onboarding', { replace: true });
   }, [session, profile, navigate]);
 
+  // Build nav items with conditional pages inserted
+  const visibleNav = useMemo(() => {
+    const enabled = profile?.enabled_pages ?? {};
+    const extras = Object.entries(CONDITIONAL_PAGES)
+      .filter(([key]) => enabled[key])
+      .map(([, v]) => v);
+    // Insert conditional pages before Finance
+    const financeIdx = NAV.findIndex(n => n.to === '/finance');
+    const items = [...NAV];
+    items.splice(financeIdx, 0, ...extras);
+    return items;
+  }, [profile?.enabled_pages]);
+
   const cycleTheme = () => setTheme(theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light');
 
   return (
@@ -59,7 +77,7 @@ export function AppShell() {
           {!collapsed && <span className="font-semibold tracking-tight">Plynth</span>}
         </div>
         <nav className="flex-1 p-2 space-y-1">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {visibleNav.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -116,7 +134,7 @@ export function AppShell() {
 
         {/* Mobile bottom nav */}
         <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-card/95 backdrop-blur border-t flex justify-around py-2">
-          {NAV.slice(0, 5).map(({ to, label, icon: Icon }) => (
+          {visibleNav.slice(0, 5).map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}

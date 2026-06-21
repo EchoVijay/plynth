@@ -35,6 +35,7 @@ const USER_DATA_KEYWORDS = [
   'learning', 'topic', 'topics', 'plan', 'study',
   'job', 'jobs', 'application', 'applications', 'interview', 'offer',
   'note', 'notes', 'notebook', 'section',
+  'period', 'cycle', 'ovulation', 'fertile', 'menstrual', 'cramps',
   'profile',
 ];
 function looksLikeUserData(text: string): boolean {
