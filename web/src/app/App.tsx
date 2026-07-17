@@ -15,6 +15,8 @@ import { FinancePage } from '@/pages/FinancePage';
 import { BookmarksPage } from '@/pages/BookmarksPage';
 import { HabitsPage } from '@/pages/HabitsPage';
 import { FocusPage } from '@/pages/FocusPage';
+import { SubscriptionsPage } from '@/pages/SubscriptionsPage';
+import { WellnessPage } from '@/pages/WellnessPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
@@ -37,6 +39,8 @@ export default function App() {
         <Route path="/bookmarks" element={<BookmarksPage />} />
         <Route path="/habits" element={<HabitsPage />} />
         <Route path="/focus" element={<FocusPage />} />
+        <Route path="/subscriptions" element={<SubscriptionsPage />} />
+        <Route path="/wellness" element={<WellnessPage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>

@@ -3,15 +3,20 @@ import { motion } from 'framer-motion';
 import {
   LayoutDashboard, BookOpen, Briefcase, CheckSquare, Wallet, Settings, MessageCircle,
   Menu, Bell, LogOut, Moon, Sun, Monitor, NotebookPen, Heart, FileText, CalendarDays,
-  Bookmark, Flame, Timer,
+  Bookmark, Flame, Timer, Pencil, GripVertical, CreditCard, Droplets,
 } from 'lucide-react';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { cn, greeting } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { useSession } from './useSession';
 import { useTheme } from './ThemeProvider';
 import { ErrorBoundary } from './ErrorBoundary';
-import { useQuery } from '@tanstack/react-query';
+import { QuickCapture } from '@/components/QuickCapture';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 // All toggleable pages. Dashboard & Settings are pinned (always visible).
 export const ALL_PAGES: { key: string; to: string; label: string; icon: any; defaultEnabled: boolean }[] = [
@@ -27,6 +32,8 @@ export const ALL_PAGES: { key: string; to: string; label: string; icon: any; def
   { key: 'bookmarks', to: '/bookmarks', label: 'Bookmarks', icon: Bookmark, defaultEnabled: false },
   { key: 'habits', to: '/habits', label: 'Habits', icon: Flame, defaultEnabled: false },
   { key: 'focus', to: '/focus', label: 'Focus', icon: Timer, defaultEnabled: false },
+  { key: 'subscriptions', to: '/subscriptions', label: 'Subscriptions', icon: CreditCard, defaultEnabled: false },
+  { key: 'wellness', to: '/wellness', label: 'Wellness', icon: Droplets, defaultEnabled: false },
 ];
 
 export function isPageEnabled(enabledPages: Record<string, boolean> | null | undefined, key: string): boolean {
@@ -35,12 +42,29 @@ export function isPageEnabled(enabledPages: Record<string, boolean> | null | und
   return (enabledPages ?? {})[key] ?? cfg.defaultEnabled;
 }
 
+function SortableNavItem({ id, to, label, Icon }: { id: string; to: string; label: string; Icon: any }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  return (
+    <div ref={setNodeRef} style={style} className={cn('flex items-center gap-0 rounded-lg', isDragging && 'opacity-50 bg-accent/50')}>
+      <button {...attributes} {...listeners} className="p-1.5 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground shrink-0 touch-none">
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <NavLink to={to} end={to === '/'} className={({ isActive }) => cn('flex-1 flex items-center gap-3 px-2 py-2 rounded-lg text-sm font-medium transition-colors', isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground hover:text-foreground')}>
+        <Icon className="h-5 w-5 shrink-0" /><span>{label}</span>
+      </NavLink>
+    </div>
+  );
+}
+
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const { session } = useSession();
   const navigate = useNavigate();
   const loc = useLocation();
   const { theme, setTheme } = useTheme();
+  const qc = useQueryClient();
 
   const { data: profile } = useQuery({
     queryKey: ['profile', session?.user.id],
@@ -56,33 +80,47 @@ export function AppShell() {
   }, [session, profile, navigate]);
 
   // Build nav: Dashboard (pinned first) + enabled pages in order + Settings (pinned last)
-  const visibleNav = useMemo(() => {
+  // Reorderable pages (excludes pinned Dashboard & Settings)
+  const reorderablePages = useMemo(() => {
     const enabled = profile?.enabled_pages;
     const order: string[] | null = profile?.page_order;
-
-    // Filter enabled pages
     let pages = ALL_PAGES.filter(p => isPageEnabled(enabled, p.key));
-
-    // Apply custom order if set
     if (order?.length) {
       const ordered: typeof pages = [];
       for (const key of order) {
         const p = pages.find(pg => pg.key === key);
         if (p) ordered.push(p);
       }
-      // Append any pages not in the order list (newly added pages)
       for (const p of pages) {
         if (!ordered.some(o => o.key === p.key)) ordered.push(p);
       }
       pages = ordered;
     }
-
-    return [
-      { key: '_dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard, defaultEnabled: true },
-      ...pages,
-      { key: '_settings', to: '/settings', label: 'Settings', icon: Settings, defaultEnabled: true },
-    ];
+    return pages;
   }, [profile?.enabled_pages, profile?.page_order]);
+
+  const visibleNav = useMemo(() => [
+    { key: '_dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard, defaultEnabled: true },
+    ...reorderablePages,
+    { key: '_settings', to: '/settings', label: 'Settings', icon: Settings, defaultEnabled: true },
+  ], [reorderablePages]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+  );
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const keys = reorderablePages.map(p => p.key);
+    const oldIdx = keys.indexOf(active.id as string);
+    const newIdx = keys.indexOf(over.id as string);
+    if (oldIdx === -1 || newIdx === -1) return;
+    const newOrder = arrayMove(keys, oldIdx, newIdx);
+    await supabase.from('profiles').update({ page_order: newOrder }).eq('user_id', session!.user.id);
+    qc.invalidateQueries({ queryKey: ['profile', session?.user.id] });
+  }, [reorderablePages, session?.user.id, qc]);
 
   const cycleTheme = () => setTheme(theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light');
 
@@ -93,37 +131,69 @@ export function AppShell() {
         initial={false}
         animate={{ width: collapsed ? 72 : 240 }}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="hidden md:flex flex-col border-r bg-card sticky top-0 h-screen overflow-hidden"
+        className="hidden md:flex flex-col border-r bg-card sticky top-0 h-screen overflow-x-hidden"
       >
         <div className="flex items-center gap-2 px-4 h-16 border-b">
           <div className="h-8 w-8 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">P</div>
           {!collapsed && <span className="font-semibold tracking-tight">Plynth</span>}
         </div>
-        <nav className="flex-1 p-2 space-y-1">
-          {visibleNav.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                  isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground hover:text-foreground',
-                )
-              }
-            >
-              <Icon className="h-5 w-5 shrink-0" />
-              {!collapsed && <span>{label}</span>}
-            </NavLink>
-          ))}
+        <nav className="flex-1 p-2 space-y-1 overflow-y-auto scrollbar-thin">
+          {editMode && !collapsed ? (
+            <>
+              {/* Dashboard pinned */}
+              <NavLink to="/" end className={({ isActive }) => cn('flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors', isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground hover:text-foreground')}>
+                <LayoutDashboard className="h-5 w-5 shrink-0" /><span>Dashboard</span>
+              </NavLink>
+              {/* Draggable pages */}
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={reorderablePages.map(p => p.key)} strategy={verticalListSortingStrategy}>
+                  {reorderablePages.map(({ key, to, label, icon: Icon }) => (
+                    <SortableNavItem key={key} id={key} to={to} label={label} Icon={Icon} />
+                  ))}
+                </SortableContext>
+              </DndContext>
+              {/* Settings pinned */}
+              <NavLink to="/settings" className={({ isActive }) => cn('flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors', isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground hover:text-foreground')}>
+                <Settings className="h-5 w-5 shrink-0" /><span>Settings</span>
+              </NavLink>
+            </>
+          ) : (
+            visibleNav.map(({ key, to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === '/'}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                    isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground hover:text-foreground',
+                  )
+                }
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                {!collapsed && <span>{label}</span>}
+              </NavLink>
+            ))
+          )}
         </nav>
-        <button
-          onClick={() => setCollapsed(c => !c)}
-          className="p-3 border-t flex items-center gap-3 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <Menu className="h-5 w-5" />
-          {!collapsed && <span>Collapse</span>}
-        </button>
+        <div className="border-t flex items-center">
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="flex-1 p-3 flex items-center gap-3 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <Menu className="h-5 w-5" />
+            {!collapsed && <span>Collapse</span>}
+          </button>
+          {!collapsed && (
+            <button
+              onClick={() => setEditMode(e => !e)}
+              className={cn('p-3 text-sm hover:text-foreground', editMode ? 'text-primary' : 'text-muted-foreground')}
+              title="Reorder pages"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+          )}
+        </div>
         {!collapsed && <span className="px-3 pb-2 text-[10px] text-muted-foreground/50">v{__APP_VERSION__}</span>}
       </motion.aside>
 
@@ -171,6 +241,8 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+
+        <QuickCapture />
       </div>
     </div>
   );
