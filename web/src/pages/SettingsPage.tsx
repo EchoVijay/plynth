@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Download, Send, Smartphone, Copy, X, ChevronUp, ChevronDown, GripVertical, MessageCircle } from 'lucide-react';
+import { Plus, Trash2, Download, Send, Smartphone, Copy, X, MessageCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -222,24 +222,6 @@ export function SettingsPage() {
               </div>
             );
           })}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Page Order</CardTitle>
-          <CardDescription>Reorder pages in your navigation. Dashboard & Settings are pinned.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <PageReorder
-            enabledPages={profileQ.data?.enabled_pages}
-            pageOrder={profileQ.data?.page_order}
-            userId={userId!}
-            onSaved={() => {
-              qc.invalidateQueries({ queryKey: ['profile-settings', userId] });
-              qc.invalidateQueries({ queryKey: ['profile', userId] });
-            }}
-          />
         </CardContent>
       </Card>
 
@@ -592,65 +574,5 @@ function TelegramCard({ userId, chatId, onLinked }: { userId: string; chatId?: n
         )}
       </CardContent>
     </Card>
-  );
-}
-
-// ==================== Page Reorder ====================
-function PageReorder({ enabledPages, pageOrder, userId, onSaved }: {
-  enabledPages: Record<string, boolean> | null | undefined;
-  pageOrder: string[] | null | undefined;
-  userId: string;
-  onSaved: () => void;
-}) {
-  // Build the ordered list of currently-enabled pages
-  const enabledList = ALL_PAGES.filter(p => isPageEnabled(enabledPages, p.key));
-  const ordered = (() => {
-    if (pageOrder?.length) {
-      const result: typeof enabledList = [];
-      for (const key of pageOrder) {
-        const p = enabledList.find(pg => pg.key === key);
-        if (p) result.push(p);
-      }
-      for (const p of enabledList) {
-        if (!result.some(r => r.key === p.key)) result.push(p);
-      }
-      return result;
-    }
-    return enabledList;
-  })();
-
-  const move = async (idx: number, dir: -1 | 1) => {
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= ordered.length) return;
-    const keys = ordered.map(p => p.key);
-    [keys[idx], keys[newIdx]] = [keys[newIdx], keys[idx]];
-    await supabase.from('profiles').update({ page_order: keys }).eq('user_id', userId);
-    onSaved();
-    toast.success('Order updated');
-  };
-
-  if (!ordered.length) return <p className="text-sm text-muted-foreground">No pages enabled.</p>;
-
-  return (
-    <div className="space-y-1">
-      {ordered.map((page, i) => {
-        const Icon = page.icon;
-        return (
-          <div key={page.key} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted">
-            <GripVertical className="h-4 w-4 text-muted-foreground/40" />
-            <Icon className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium flex-1">{page.label}</span>
-            <button onClick={() => move(i, -1)} disabled={i === 0}
-              className="p-1 rounded hover:bg-background disabled:opacity-30">
-              <ChevronUp className="h-4 w-4" />
-            </button>
-            <button onClick={() => move(i, 1)} disabled={i === ordered.length - 1}
-              className="p-1 rounded hover:bg-background disabled:opacity-30">
-              <ChevronDown className="h-4 w-4" />
-            </button>
-          </div>
-        );
-      })}
-    </div>
   );
 }
