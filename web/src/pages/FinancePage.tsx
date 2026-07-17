@@ -93,21 +93,41 @@ export function FinancePage() {
     },
   });
 
+  const subsQ = useQuery({
+    queryKey: ['subscriptions', userId],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data } = await supabase.from('subscriptions').select('*').eq('user_id', userId!).eq('status', 'active');
+      return data ?? [];
+    },
+  });
+
+  const [includeSubs, setIncludeSubs] = useState(() => localStorage.getItem('finance_include_subs') === 'true');
+
   const monthEmis = useMemo(() => (loansQ.data ?? []).filter((l: any) => l.status === 'active'), [loansQ.data]);
+
+  const subsBurn = useMemo(() => {
+    return (subsQ.data ?? []).reduce((sum: number, s: any) => {
+      const months = s.billing_cycle === 'yearly' ? 12 : s.billing_cycle === 'quarterly' ? 3 : 1;
+      return sum + Number(s.amount) / months;
+    }, 0);
+  }, [subsQ.data]);
 
   const totals = useMemo(() => {
     const recurring = (recurringQ.data ?? []).filter((r: any) => r.active).reduce((s: number, r: any) => s + Number(r.amount), 0);
     const oneOff = (monthlyExpQ.data ?? []).filter((e: any) => !e.recurring_id).reduce((s: number, e: any) => s + Number(e.amount), 0);
     const emi = monthEmis.reduce((s: number, l: any) => s + Number(l.emi_amount), 0);
-    const planned = recurring + oneOff + emi;
+    const subs = includeSubs ? Math.round(subsBurn) : 0;
+    const planned = recurring + oneOff + emi + subs;
     const total = Number(budgetQ.data?.total_budget ?? 0);
-    return { recurring, oneOff, emi, planned, total, balance: total - planned };
-  }, [recurringQ.data, monthlyExpQ.data, monthEmis, budgetQ.data]);
+    return { recurring, oneOff, emi, subs, planned, total, balance: total - planned };
+  }, [recurringQ.data, monthlyExpQ.data, monthEmis, budgetQ.data, includeSubs, subsBurn]);
 
   const breakup = useMemo(() => {
     const list: { name: string; value: number }[] = [];
     if (totals.emi) list.push({ name: 'EMIs', value: totals.emi });
     if (totals.recurring) list.push({ name: 'Recurring', value: totals.recurring });
+    if (totals.subs) list.push({ name: 'Subscriptions', value: totals.subs });
     if (totals.oneOff) list.push({ name: 'This month', value: totals.oneOff });
     if (totals.balance > 0) list.push({ name: 'Balance', value: totals.balance });
     return list;
@@ -278,7 +298,7 @@ export function FinancePage() {
               label="Planned"
               value={totals.planned}
               accent="amber"
-              sub={`EMIs ${formatINR(totals.emi)} · Recurring ${formatINR(totals.recurring)} · Other ${formatINR(totals.oneOff)}`}
+              sub={`EMIs ${formatINR(totals.emi)} · Recurring ${formatINR(totals.recurring)}${totals.subs ? ` · Subs ${formatINR(totals.subs)}` : ''} · Other ${formatINR(totals.oneOff)}`}
             />
             <BudgetTile label="Balance" value={totals.balance} accent={totals.balance >= 0 ? 'green' : 'red'} />
             <div className="rounded-xl border p-3">
@@ -313,6 +333,15 @@ export function FinancePage() {
               </div>
             </div>
           )}
+
+          {/* Include subscriptions toggle */}
+          <div className="mt-3 flex items-center justify-between border-t pt-3">
+            <label className="text-xs text-muted-foreground">Include subscription costs in budget</label>
+            <Switch
+              checked={includeSubs}
+              onCheckedChange={(v) => { setIncludeSubs(v); localStorage.setItem('finance_include_subs', String(v)); }}
+            />
+          </div>
         </CardContent>
       </Card>
 
