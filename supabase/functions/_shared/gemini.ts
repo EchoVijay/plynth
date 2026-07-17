@@ -108,3 +108,59 @@ export async function geminiJSON<T>(prompt: string, schemaHint: string): Promise
   }
   throw new Error(`Gemini failed after retries: ${lastErr}`);
 }
+
+export async function geminiVision<T>(prompt: string, imageBase64: string, mimeType: string, schemaHint: string): Promise<T> {
+  const key = await getSecret('GEMINI_API_KEY');
+  if (!key) throw new Error('GEMINI_API_KEY not configured');
+  const startedAt = Date.now();
+
+  const body = {
+    contents: [{
+      role: 'user',
+      parts: [
+        { inline_data: { mime_type: mimeType, data: imageBase64 } },
+        { text: `${prompt}\n\nReturn ONLY valid JSON matching this shape:\n${schemaHint}` },
+      ],
+    }],
+    generationConfig: { responseMimeType: 'application/json', temperature: 0.3 },
+  };
+
+  let lastErr = '';
+  for (const model of MODELS) {
+    if (Date.now() - startedAt > TOTAL_BUDGET_MS) {
+      throw new Error(`Gemini vision gave up after ${TOTAL_BUDGET_MS / 1000}s. ${lastErr}`.trim());
+    }
+    let r: Response;
+    try {
+      r = await callOnce(model, key, body);
+    } catch (e) {
+      lastErr = `${model} vision fetch failed: ${(e as Error).message}`;
+      console.warn('[gemini]', lastErr);
+      continue;
+    }
+    if (r.ok) {
+      await bumpUsage();
+      const data = await r.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      if (!text || text.trim() === '' || text.trim() === '{}') {
+        lastErr = `${model} vision returned empty`;
+        console.warn('[gemini]', lastErr);
+        continue;
+      }
+      try {
+        return JSON.parse(text) as T;
+      } catch (e) {
+        lastErr = `${model} vision invalid JSON: ${text.slice(0, 200)}`;
+        console.warn('[gemini]', lastErr);
+        continue;
+      }
+    }
+    const errBody = (await r.text()).slice(0, 400);
+    lastErr = `${model} vision → ${r.status}: ${errBody}`;
+    console.warn('[gemini]', lastErr);
+    if (r.status === 429) {
+      throw new Error(`Gemini quota exceeded (HTTP 429). ${errBody.slice(0, 200)}`);
+    }
+  }
+  throw new Error(`Gemini vision failed: ${lastErr}`);
+}

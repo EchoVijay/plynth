@@ -5,8 +5,8 @@
 //   AI_PROVIDER=groq | ollama | gemini   (single provider, no fallback)
 
 import { getSecret } from './util.ts';
-import { geminiJSON } from './gemini.ts';
-import { groqJSON, groqText, RateLimitError } from './groq.ts';
+import { geminiJSON, geminiVision } from './gemini.ts';
+import { groqJSON, groqText, groqVision, RateLimitError } from './groq.ts';
 import { ollamaJSON, ollamaText } from './ollama.ts';
 
 type Provider = 'gemini' | 'groq' | 'ollama';
@@ -99,4 +99,27 @@ export async function aiText(prompt: string, system?: string): Promise<string> {
 export async function aiActiveProvider(): Promise<string> {
   const chain = await resolveChain();
   return chain.join(',');
+}
+
+export async function aiVision<T>(prompt: string, imageBase64: string, mimeType: string, schemaHint: string): Promise<T> {
+  // Vision chain: always try gemini first (best vision), then groq
+  const visionProviders: Provider[] = ['gemini', 'groq'];
+  let lastErr: unknown = null;
+  for (const p of visionProviders) {
+    try {
+      let out: T;
+      if (p === 'gemini') {
+        out = await geminiVision<T>(prompt, imageBase64, mimeType, schemaHint);
+      } else {
+        out = await groqVision<T>(prompt, imageBase64, mimeType, schemaHint);
+      }
+      console.log(`[ai-provider] ${p} vision ok`);
+      return out;
+    } catch (e) {
+      console.warn(`[ai-provider] ${p} vision failed: ${(e as Error).message}`);
+      lastErr = e;
+      if (!isRetryable(e)) break;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('All AI vision providers failed');
 }

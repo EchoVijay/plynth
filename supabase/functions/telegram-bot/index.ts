@@ -2,7 +2,8 @@
 // Receives updates from Telegram, routes commands, and interacts with DB.
 
 import { admin, json, corsHeaders, getSecret } from '../_shared/util.ts';
-import { sendTelegram, parseCommand, downloadFile, setWebhook, type TelegramUpdate } from '../_shared/telegram.ts';
+import { sendTelegram, parseCommand, downloadFile, setWebhook, setMyCommands, type TelegramUpdate } from '../_shared/telegram.ts';
+import { aiVision } from '../_shared/ai-provider.ts';
 
 // ---------- Helpers ----------
 
@@ -113,6 +114,32 @@ async function handleTask(sb: ReturnType<typeof admin>, userId: string, args: st
   return `✅ Task created: *${title}*\n📅 ${dueDate} · ${priority}`;
 }
 
+async function handleNote(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  if (!args) return '❌ Usage: `/note Meeting notes: discussed Q3 targets`';
+
+  // Find or create "Telegram Notes" section
+  let { data: section } = await sb.from('note_sections').select('id')
+    .eq('user_id', userId).eq('name', 'Telegram Notes').maybeSingle();
+  if (!section) {
+    const { data: newSection, error: secErr } = await sb.from('note_sections').insert({
+      user_id: userId, name: 'Telegram Notes', color: '#6366f1', icon: '📱', sort_order: 99,
+    }).select('id').single();
+    if (secErr) return `❌ ${secErr.message}`;
+    section = newSection;
+  }
+
+  // Extract title (first line or first 50 chars) and full content
+  const firstLine = args.split('\n')[0].slice(0, 80);
+  const contentJson = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: args }] }] };
+
+  const { error } = await sb.from('note_pages').insert({
+    user_id: userId, section_id: section!.id, title: firstLine,
+    content_json: contentJson, word_count: args.split(/\s+/).length,
+  });
+  if (error) return `❌ ${error.message}`;
+  return `✅ Note saved: *${firstLine}*`;
+}
+
 async function handlePeriod(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
   const action = args.toLowerCase().trim();
   if (action === 'start') {
@@ -162,20 +189,38 @@ async function handleEvent(sb: ReturnType<typeof admin>, userId: string, args: s
 
   let eventTime: string | null = null;
   let titleStart = 1;
+  let category = 'general';
+  let recurrence: string | null = null;
+  let reminderMinutes: number[] = [];
+
   // Check if second part is a time (HH:MM)
   if (parts[1] && /^\d{1,2}:\d{2}$/.test(parts[1])) {
     eventTime = parts[1].padStart(5, '0') + ':00';
     titleStart = 2;
   }
 
+  // Check if next part is a category keyword
+  const catKeywords = ['birthday', 'interview', 'exam', 'emi', 'bill'];
+  if (parts[titleStart] && catKeywords.includes(parts[titleStart].toLowerCase())) {
+    category = parts[titleStart].toLowerCase();
+    titleStart++;
+    // Auto-set recurrence & reminder for birthdays
+    if (category === 'birthday') {
+      recurrence = 'yearly';
+      reminderMinutes = [1440]; // 1 day before
+    }
+  }
+
   const title = parts.slice(titleStart).join(' ');
   if (!title) return '❌ Event title is required.';
 
   const { error } = await sb.from('calendar_events').insert({
-    user_id: userId, title, event_date: eventDate, event_time: eventTime, category: 'general',
+    user_id: userId, title, event_date: eventDate, event_time: eventTime,
+    category, recurrence, reminder_minutes: reminderMinutes,
   });
   if (error) return `❌ ${error.message}`;
-  return `✅ Event created: *${title}*\n📅 ${eventDate}${eventTime ? ' at ' + eventTime.slice(0, 5) : ''}`;
+  const catEmoji: Record<string, string> = { birthday: '🎂', interview: '💼', exam: '📝', emi: '💰', bill: '🧾', general: '📌' };
+  return `✅ ${catEmoji[category] ?? '📌'} Event created: *${title}*\n📅 ${eventDate}${eventTime ? ' at ' + eventTime.slice(0, 5) : ''}${recurrence ? ' (yearly)' : ''}`;
 }
 
 async function handleToday(sb: ReturnType<typeof admin>, userId: string): Promise<string> {
@@ -259,16 +304,18 @@ async function handleDoc(sb: ReturnType<typeof admin>, userId: string, update: T
   if (error) return `❌ Upload failed: ${error.message}`;
 
   // Save metadata to documents table
+  const title = msg.caption?.trim() || fileName;
   await sb.from('documents').insert({
     user_id: userId,
+    title,
     file_name: fileName,
-    storage_path: storagePath,
+    file_path: storagePath,
     mime_type: mimeType,
     size_bytes: file.data.byteLength,
     category: 'other',
   });
 
-  return `✅ Document uploaded: *${fileName}* (${(file.data.byteLength / 1024).toFixed(1)} KB)`;
+  return `✅ Document uploaded: *${title}* (${(file.data.byteLength / 1024).toFixed(1)} KB)`;
 }
 
 async function handleEmi(sb: ReturnType<typeof admin>, userId: string): Promise<string> {
@@ -364,13 +411,28 @@ async function handleExpense(sb: ReturnType<typeof admin>, userId: string, args:
   const amount = parseFloat(parts[0]);
   if (isNaN(amount) || amount <= 0) return '❌ First argument must be a positive number (amount).';
 
-  const validCats = ['food', 'transport', 'shopping', 'bills', 'health', 'entertainment', 'education', 'other'];
+  const validCats = ['housing', 'food', 'transport', 'utilities', 'entertainment', 'health', 'shopping', 'other'];
+  const catAliases: Record<string, string> = {
+    lunch: 'food', dinner: 'food', breakfast: 'food', snack: 'food', grocery: 'food', groceries: 'food',
+    uber: 'transport', auto: 'transport', metro: 'transport', bus: 'transport', fuel: 'transport', petrol: 'transport',
+    rent: 'housing', wifi: 'utilities', electric: 'utilities', electricity: 'utilities', water: 'utilities', gas: 'utilities', bills: 'utilities',
+    movie: 'entertainment', netflix: 'entertainment', spotify: 'entertainment',
+    medicine: 'health', doctor: 'health', gym: 'health',
+    clothes: 'shopping', amazon: 'shopping',
+  };
+
   let category = 'other';
   let descParts = parts.slice(1);
 
-  if (parts[1] && validCats.includes(parts[1].toLowerCase())) {
-    category = parts[1].toLowerCase();
-    descParts = parts.slice(2);
+  if (parts[1]) {
+    const word = parts[1].toLowerCase();
+    if (validCats.includes(word)) {
+      category = word;
+      descParts = parts.slice(2);
+    } else if (catAliases[word]) {
+      category = catAliases[word];
+      descParts = parts.slice(2);
+    }
   }
   const description = descParts.join(' ') || null;
 
@@ -379,25 +441,134 @@ async function handleExpense(sb: ReturnType<typeof admin>, userId: string, args:
   });
   if (error) return `❌ ${error.message}`;
 
-  const catEmoji: Record<string, string> = { food: '🍔', transport: '🚗', shopping: '🛒', bills: '💡', health: '💊', entertainment: '🎬', education: '📚', other: '📦' };
+  const catEmoji: Record<string, string> = { food: '🍔', transport: '🚗', shopping: '🛒', utilities: '💡', health: '💊', entertainment: '🎬', housing: '🏠', other: '📦' };
   return `✅ ${catEmoji[category] ?? '📦'} ₹${amount.toLocaleString('en-IN')} — ${description ?? category}`;
+}
+
+// ---------- Subscription ----------
+async function handleSub(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  // /sub → list active subs
+  if (!parts[0] || parts[0] === 'list') {
+    const { data } = await sb.from('subscriptions').select('name,amount,billing_cycle,next_renewal_date')
+      .eq('user_id', userId).eq('status', 'active').order('next_renewal_date');
+    if (!data?.length) return '💳 No active subscriptions.\nAdd with: `/sub add Netflix 199 monthly`';
+    const lines = data.map(s => {
+      const daysLeft = Math.ceil((new Date(s.next_renewal_date + 'T00:00:00').getTime() - Date.now()) / 86400000);
+      return `• *${s.name}* — ₹${s.amount} (${s.billing_cycle}) · ${daysLeft}d`;
+    });
+    const total = data.reduce((sum, s) => {
+      const m = s.billing_cycle === 'yearly' ? 12 : s.billing_cycle === 'quarterly' ? 3 : 1;
+      return sum + Number(s.amount) / m;
+    }, 0);
+    return `💳 *Active Subscriptions*\n\n${lines.join('\n')}\n\n*Monthly burn:* ₹${Math.round(total).toLocaleString('en-IN')}`;
+  }
+  // /sub add <name> <amount> <cycle>
+  if (parts[0] === 'add') {
+    const name = parts[1];
+    const amount = parseFloat(parts[2]);
+    const cycle = parts[3]?.toLowerCase() || 'monthly';
+    if (!name || !amount) return '❌ Usage: `/sub add Netflix 199 monthly`';
+    if (!['monthly', 'quarterly', 'yearly'].includes(cycle)) return '❌ Cycle must be: monthly, quarterly, yearly';
+    const billingDay = new Date().getDate();
+    const nextDate = today();
+    const { error } = await sb.from('subscriptions').insert({
+      user_id: userId, name, amount, category: 'other', billing_cycle: cycle,
+      billing_day: billingDay, next_renewal_date: nextDate, status: 'active',
+    });
+    if (error) return `❌ ${error.message}`;
+    return `✅ Subscription added: *${name}* — ₹${amount} (${cycle})`;
+  }
+  return '❌ Usage: `/sub` to list, `/sub add <name> <amount> <cycle>` to add';
+}
+
+// ---------- Water ----------
+async function handleWater(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  const num = parseInt(args.trim());
+  // /water → show today's progress
+  if (!num && args.trim() !== '0') {
+    const { data } = await sb.from('water_logs').select('glasses,goal')
+      .eq('user_id', userId).eq('log_date', today()).maybeSingle();
+    const g = data?.glasses ?? 0;
+    const goal = data?.goal ?? 8;
+    const pct = Math.round((g / goal) * 100);
+    return `💧 *Water Today:* ${g}/${goal} glasses (${pct}%)\n${g >= goal ? '✅ Goal met! Great job!' : `${goal - g} more to go`}\n\nLog with: \`/water 2\``;
+  }
+  // /water N → add N glasses
+  const toAdd = Math.max(0, num);
+  const { data: existing } = await sb.from('water_logs').select('glasses,goal')
+    .eq('user_id', userId).eq('log_date', today()).maybeSingle();
+  const current = existing?.glasses ?? 0;
+  const goal = existing?.goal ?? 8;
+  const newTotal = current + toAdd;
+  const { error } = await sb.from('water_logs').upsert(
+    { user_id: userId, log_date: today(), glasses: newTotal, goal, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id,log_date' }
+  );
+  if (error) return `❌ ${error.message}`;
+  return `💧 +${toAdd} glass${toAdd > 1 ? 'es' : ''} → *${newTotal}/${goal}*${newTotal >= goal ? ' ✅ Goal met!' : ''}`;
+}
+
+// ---------- Sleep ----------
+async function handleSleep(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/);
+  if (parts.length < 2) return '❌ Usage: `/sleep 11pm 7am [quality 1-5]`';
+
+  // Parse times
+  function parseTgTime(val: string): string {
+    const m = val.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (!m) return val;
+    let h = parseInt(m[1]);
+    const min = m[2] || '00';
+    const ampm = m[3]?.toLowerCase();
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    return `${String(h).padStart(2, '0')}:${min}`;
+  }
+
+  const sleepTime = parseTgTime(parts[0]);
+  const wakeTime = parseTgTime(parts[1]);
+  const quality = parts[2] ? Math.min(5, Math.max(1, parseInt(parts[2]) || 0)) : null;
+
+  // Compute hours
+  const [sh, sm] = sleepTime.split(':').map(Number);
+  const [wh, wm] = wakeTime.split(':').map(Number);
+  let sleepMin = sh * 60 + (sm || 0);
+  let wakeMin = wh * 60 + (wm || 0);
+  if (wakeMin <= sleepMin) wakeMin += 24 * 60;
+  const totalHours = Math.round((wakeMin - sleepMin) / 6) / 10;
+
+  const { error } = await sb.from('sleep_logs').upsert(
+    { user_id: userId, log_date: today(), sleep_time: sleepTime, wake_time: wakeTime, total_hours: totalHours, quality, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id,log_date' }
+  );
+  if (error) return `❌ ${error.message}`;
+  const stars = quality ? ' ⭐'.repeat(quality) : '';
+  return `🌙 Sleep logged: *${totalHours}h* (${sleepTime} → ${wakeTime})${stars}`;
 }
 
 function helpText(): string {
   return [
     '🤖 *Plynth Bot Commands*\n',
-    '`/task <title> [date] [priority]` — Add a task',
+    '`/todo <title> [date] [priority]` — Add a task',
+    '`/note <text>` — Quick note to Telegram Notes',
     '`/habit [name]` — Check-in a habit (or view all)',
     '`/expense <amount> [category] [note]` — Log expense',
+    '`/sub` — List subscriptions / `/sub add <name> <₹> <cycle>`',
+    '`/water [N]` — Log water (or view today\'s intake)',
+    '`/sleep <bed> <wake> [quality]` — Log sleep',
     '`/focus` — Today\'s focus sessions',
     '`/period start|end` — Log period',
     '`/bookmark <url> [title]` — Save bookmark',
-    '`/event <date> [time] <title>` — Add calendar event',
+    '`/event <date> [category] <title>` — Add event',
     '`/today` — Today\'s summary',
     '`/emi` — Active EMI summary',
     '`/link <code>` — Link your Plynth account',
     '`/unlink` — Unlink account',
     '`/help` — Show this message',
+    '',
+    '*Categories:* birthday, interview, exam, emi, bill',
+    '*Expense:* food, transport, shopping, utilities, health, entertainment, housing',
     '',
     '📎 Send a file/photo to upload to Documents.',
     '💬 Send any text (without /) for AI chat.',
@@ -417,6 +588,28 @@ Deno.serve(async (req) => {
     if (body.action === 'setup_webhook') {
       const url = body.url || `${Deno.env.get('SUPABASE_URL')}/functions/v1/telegram-bot`;
       const result = await setWebhook(url);
+      return json(result);
+    }
+
+    if (body.action === 'setup_commands') {
+      const result = await setMyCommands([
+        { command: 'todo', description: 'Add a task — /todo Buy groceries tomorrow' },
+        { command: 'note', description: 'Quick note — /note Meeting notes...' },
+        { command: 'habit', description: 'Check-in habit — /habit or /habit Water' },
+        { command: 'expense', description: 'Log expense — /expense 200 food lunch' },
+        { command: 'event', description: 'Add event — /event 2026-07-01 birthday Mom' },
+        { command: 'period', description: 'Log period — /period start or /period end' },
+        { command: 'bookmark', description: 'Save bookmark — /bookmark https://...' },
+        { command: 'sub', description: 'Subscriptions — /sub or /sub add Netflix 199 monthly' },
+        { command: 'water', description: 'Log water — /water or /water 3' },
+        { command: 'sleep', description: 'Log sleep — /sleep 11pm 7am 4' },
+        { command: 'focus', description: 'Today\'s focus sessions' },
+        { command: 'today', description: 'Today\'s summary' },
+        { command: 'emi', description: 'Active EMI summary' },
+        { command: 'link', description: 'Link Plynth account — /link CODE' },
+        { command: 'unlink', description: 'Unlink account' },
+        { command: 'help', description: 'Show all commands' },
+      ]);
       return json(result);
     }
 
@@ -461,6 +654,8 @@ Deno.serve(async (req) => {
       let result: string;
       switch (cmd.command) {
         case 'task': result = await handleTask(sb, userId, cmd.args); break;
+        case 'todo': result = await handleTask(sb, userId, cmd.args); break;
+        case 'note': result = await handleNote(sb, userId, cmd.args); break;
         case 'period': result = await handlePeriod(sb, userId, cmd.args); break;
         case 'bookmark': result = await handleBookmark(sb, userId, cmd.args); break;
         case 'event': result = await handleEvent(sb, userId, cmd.args); break;
@@ -468,6 +663,9 @@ Deno.serve(async (req) => {
         case 'emi': result = await handleEmi(sb, userId); break;
         case 'habit': result = await handleHabit(sb, userId, cmd.args); break;
         case 'expense': result = await handleExpense(sb, userId, cmd.args); break;
+        case 'sub': result = await handleSub(sb, userId, cmd.args); break;
+        case 'water': result = await handleWater(sb, userId, cmd.args); break;
+        case 'sleep': result = await handleSleep(sb, userId, cmd.args); break;
         case 'focus': result = await handleFocus(sb, userId); break;
         case 'unlink': result = await handleUnlink(sb, chatId); break;
         default: result = `Unknown command: /${cmd.command}\nType /help for available commands.`;
@@ -476,8 +674,73 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
-    // File/photo upload → Documents
+    // File/photo upload → try bill scan first, then fall back to document upload
     if (msg.document || msg.photo?.length) {
+      const caption = msg.caption?.trim() ?? '';
+      const isExpenseCaption = caption.toLowerCase().startsWith('/expense');
+      const isPhoto = !!msg.photo?.length;
+      // User caption (strip /expense prefix if present)
+      const userCaption = isExpenseCaption ? caption.slice(8).trim() : caption;
+
+      // Try bill scanning for photos (or docs with /expense caption)
+      if (isPhoto || isExpenseCaption) {
+        try {
+          await reply(chatId, '🔍 Scanning for bill/receipt...');
+          const fileId = isPhoto
+            ? msg.photo![msg.photo!.length - 1].file_id
+            : msg.document!.file_id;
+          const file = await downloadFile(fileId);
+          if (file) {
+            // Convert to base64
+            const bytes = new Uint8Array(file.data);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const base64 = btoa(binary);
+            const mime = isPhoto ? 'image/jpeg' : (msg.document?.mime_type ?? 'image/jpeg');
+
+            type BillResult = { is_bill: boolean; amount?: number; category?: string; description?: string; merchant?: string };
+            const prompt = `Analyze this image. If it's a bill, receipt, payment screenshot (GPay, PhonePe, Paytm, UPI, bank transfer, invoice, restaurant bill), extract the details.
+If NOT a bill/receipt/payment, set is_bill to false.`;
+            const schema = `{ "is_bill": true, "amount": 349, "category": "food|transport|shopping|utilities|health|entertainment|housing|other", "description": "short description", "merchant": "store name" }`;
+
+            const result = await aiVision<BillResult>(prompt, base64, mime, schema);
+
+            if (result.is_bill && result.amount && result.amount > 0) {
+              const cat = ['food','transport','shopping','utilities','health','entertainment','housing','other'].includes(result.category ?? '')
+                ? result.category! : 'other';
+              // Use user's caption as description if provided, otherwise use AI-extracted info
+              const desc = userCaption || result.description || result.merchant || cat;
+              const { error } = await sb.from('daily_expenses').insert({
+                user_id: userId, amount: result.amount, category: cat,
+                description: desc, expense_date: today(), payment_method: 'upi',
+              });
+              if (error) {
+                await reply(chatId, `❌ Bill scanned but save failed: ${error.message}`);
+              } else {
+                const catEmoji: Record<string, string> = { food: '🍔', transport: '🚗', shopping: '🛒', utilities: '💡', health: '💊', entertainment: '🎬', housing: '🏠', other: '📦' };
+                await reply(chatId, `✅ ${catEmoji[cat] ?? '📦'} Bill scanned!\n*₹${result.amount.toLocaleString('en-IN')}* — ${desc}${result.merchant && !userCaption ? ` (${result.merchant})` : ''}\nCategory: ${cat}`);
+              }
+              return json({ ok: true });
+            }
+            // Not a bill — fall through to document upload
+            if (!result.is_bill && !isExpenseCaption) {
+              const docResult = await handleDoc(sb, userId, update);
+              await reply(chatId, docResult);
+              return json({ ok: true });
+            }
+            // /expense caption but AI didn't detect a bill
+            if (isExpenseCaption) {
+              await reply(chatId, '⚠️ Could not extract expense from this image. Try a clearer photo of the bill.');
+              return json({ ok: true });
+            }
+          }
+        } catch (e) {
+          console.error('Bill scan error:', e);
+          // Fall through to document upload on AI failure
+        }
+      }
+
+      // Default: upload as document
       const result = await handleDoc(sb, userId, update);
       await reply(chatId, result);
       return json({ ok: true });

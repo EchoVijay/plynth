@@ -90,6 +90,53 @@ export async function groqText(prompt: string, system?: string): Promise<string>
   return await chat(model, messages, false);
 }
 
+const VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+
+export async function groqVision<T>(prompt: string, imageBase64: string, mimeType: string, schemaHint: string): Promise<T> {
+  const key = await getSecret('GROQ_API_KEY');
+  if (!key) throw new Error('GROQ_API_KEY not configured');
+
+  const messages = [
+    {
+      role: 'system',
+      content: 'You are a precise JSON generator. Output ONLY valid JSON. No markdown, no commentary.',
+    },
+    {
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+        { type: 'text', text: `${prompt}\n\nReturn ONLY a non-empty JSON object matching this shape:\n${schemaHint}` },
+      ],
+    },
+  ];
+
+  const r = await callGroq(VISION_MODEL, key, {
+    model: VISION_MODEL,
+    messages,
+    temperature: 0.3,
+    response_format: { type: 'json_object' },
+  });
+
+  if (r.status === 429) {
+    const detail = (await r.text()).slice(0, 200);
+    throw new RateLimitError('groq', `${VISION_MODEL} ${detail}`);
+  }
+  if (!r.ok) {
+    const detail = (await r.text()).slice(0, 400);
+    throw new Error(`Groq vision ${VISION_MODEL} → ${r.status}: ${detail}`);
+  }
+  const data = await r.json();
+  const text = data?.choices?.[0]?.message?.content ?? '';
+  if (!text || text.trim() === '' || text.trim() === '{}') {
+    throw new Error(`Groq vision returned empty payload`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw new Error(`Groq vision invalid JSON: ${(e as Error).message} :: ${text.slice(0, 200)}`);
+  }
+}
+
 // ---------- Chat-page helpers (streaming, for chat/index.ts) ----------
 
 export interface ChatMsg { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }

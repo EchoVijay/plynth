@@ -74,6 +74,7 @@ export interface TelegramUpdate {
     chat: { id: number; type: string };
     date: number;
     text?: string;
+    caption?: string;
     document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
     photo?: { file_id: string; file_size?: number; width: number; height: number }[];
   };
@@ -88,4 +89,14 @@ export function parseCommand(text: string): ParsedCommand | null {
   const m = text.match(/^\/(\w+)(?:@\w+)?\s*([\s\S]*)$/);
   if (!m) return null;
   return { command: m[1].toLowerCase(), args: m[2].trim() };
+}
+
+export async function setMyCommands(commands: { command: string; description: string }[]): Promise<{ ok: boolean }> {
+  const token = await botToken();
+  const r = await fetch(`${API}${token}/setMyCommands`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commands }),
+  });
+  return await r.json();
 }
