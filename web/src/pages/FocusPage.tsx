@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Timer, Play, Pause, Square, RotateCcw, TreePine, Clock, Zap, Lock } from 'lucide-react';
+import { Timer, Play, Pause, Square, RotateCcw, TreePine, Clock, Zap, Lock, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { cn } from '@/lib/utils';
 import { TreeComponent, TREE_SPECIES, type TreeSpeciesKey } from '@/components/trees';
+import { IsometricForest } from '@/components/IsometricForest';
 
 // ---- Types ----
 type FocusSession = {
@@ -67,7 +68,7 @@ export function FocusPage() {
 
   // Queries
   const profileQ = useQuery({
-    queryKey: ['profile', userId],
+    queryKey: ['profile-trees', userId],
     enabled: !!userId,
     queryFn: async () => {
       const { data } = await supabase.from('profiles').select('unlocked_trees').eq('user_id', userId!).maybeSingle();
@@ -85,6 +86,19 @@ export function FocusPage() {
         .eq('user_id', userId!)
         .gte('started_at', today + 'T00:00:00')
         .order('started_at', { ascending: false });
+      return (data ?? []) as FocusSession[];
+    },
+  });
+
+  const allSessionsQ = useQuery({
+    queryKey: ['focus', 'all', userId],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data } = await supabase.from('focus_sessions')
+        .select('id,tree_species,actual_seconds,status,started_at,duration_seconds')
+        .eq('user_id', userId!)
+        .in('status', ['completed', 'abandoned'])
+        .order('started_at', { ascending: true });
       return (data ?? []) as FocusSession[];
     },
   });
@@ -125,7 +139,7 @@ export function FocusPage() {
     if (newUnlocks.length > 0) {
       const updated = [...unlockedTrees, ...newUnlocks];
       supabase.from('profiles').update({ unlocked_trees: updated }).eq('user_id', userId).then(() => {
-        qc.invalidateQueries({ queryKey: ['profile', userId] });
+        qc.invalidateQueries({ queryKey: ['profile-trees', userId] });
         for (const k of newUnlocks) {
           const sp = TREE_SPECIES.find(s => s.key === k);
           if (sp) toast.success(`🎉 New tree unlocked: ${sp.emoji} ${sp.name}!`);
@@ -162,7 +176,7 @@ export function FocusPage() {
       setTimerState(status);
       setActiveSessionId(null);
       qc.invalidateQueries({ queryKey: ['focus'] });
-      qc.invalidateQueries({ queryKey: ['profile', userId] });
+      qc.invalidateQueries({ queryKey: ['profile-trees', userId] });
       if (status === 'completed') toast.success('🌳 Focus session complete! Tree planted.');
       else toast('🥀 Session abandoned. Tree withered.');
     },
@@ -455,13 +469,13 @@ export function FocusPage() {
         </motion.div>
       )}
 
-      {/* Today's Forest */}
-      <Card>
-        <CardHeader>
+      {/* Today's Garden */}
+      <Card className="overflow-hidden">
+        <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-base flex items-center gap-2">
-                <TreePine className="h-4 w-4" /> Today's Forest
+                <TreePine className="h-4 w-4" /> Today's Garden
               </CardTitle>
               <CardDescription>
                 {completedToday.length} tree{completedToday.length !== 1 ? 's' : ''} · {formatDuration(todayTotalSec)} focused
@@ -474,44 +488,85 @@ export function FocusPage() {
             )}
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {todaySessionsQ.isLoading ? (
-            <div className="flex gap-3">
-              {[0, 1, 2].map(i => <Skeleton key={i} className="w-16 h-16 rounded-lg" />)}
+            <div className="flex gap-3 p-6">
+              {[0, 1, 2].map(i => <Skeleton key={i} className="w-16 h-20 rounded-lg" />)}
             </div>
-          ) : completedToday.length === 0 ? (
-            <EmptyState icon={TreePine} title="No trees yet today — start a focus session!" />
+          ) : completedToday.length === 0 && (todaySessionsQ.data ?? []).filter(s => s.status === 'abandoned').length === 0 ? (
+            <div className="relative h-40 overflow-hidden">
+              {/* Empty meadow */}
+              <div className="absolute inset-0 bg-gradient-to-b from-sky-200 via-sky-100 to-transparent dark:from-sky-900 dark:via-sky-950 dark:to-transparent" />
+              <div className="absolute bottom-0 inset-x-0 h-12 bg-gradient-to-t from-green-400/60 to-green-300/30 dark:from-green-900/60 dark:to-green-800/20 rounded-b-lg" />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <p className="text-sm text-muted-foreground bg-background/60 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                  🌱 Plant your first tree — start a focus session!
+                </p>
+              </div>
+            </div>
           ) : (
-            <div className="flex flex-wrap gap-3">
-              {completedToday.map((s, i) => (
-                <motion.div key={s.id}
-                  initial={{ opacity: 0, scale: 0.5 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: i * 0.08 }}
-                  className="flex flex-col items-center gap-1 p-2 rounded-lg bg-muted/50"
-                  title={`${formatDuration(s.actual_seconds)} · ${s.tree_species}`}
-                >
-                  <TreeComponent species={s.tree_species} stage={1} size={56} />
-                  <span className="text-[10px] text-muted-foreground">{formatDuration(s.actual_seconds)}</span>
-                </motion.div>
-              ))}
-              {/* Show abandoned trees too (smaller, gray) */}
-              {(todaySessionsQ.data ?? []).filter(s => s.status === 'abandoned').map((s, i) => (
-                <motion.div key={s.id}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 0.5 }}
-                  transition={{ delay: completedToday.length * 0.08 + i * 0.05 }}
-                  className="flex flex-col items-center gap-1 p-2 rounded-lg bg-muted/30"
-                  title={`Abandoned after ${formatDuration(s.actual_seconds)}`}
-                >
-                  <TreeComponent species={s.tree_species} stage={Math.min(s.actual_seconds / (s.duration_seconds || 1500), 0.8)} dead size={40} />
-                  <span className="text-[10px] text-muted-foreground line-through">{formatDuration(s.actual_seconds)}</span>
-                </motion.div>
-              ))}
+            <div className="relative overflow-hidden" style={{ minHeight: 160 }}>
+              {/* Sky */}
+              <div className={cn(
+                'absolute inset-0 transition-colors duration-500',
+                completedToday.length >= 6
+                  ? 'bg-gradient-to-b from-amber-100 via-sky-100 to-transparent dark:from-amber-900/40 dark:via-sky-950 dark:to-transparent'
+                  : completedToday.length >= 3
+                  ? 'bg-gradient-to-b from-sky-200 via-sky-100 to-transparent dark:from-sky-900 dark:via-sky-950 dark:to-transparent'
+                  : 'bg-gradient-to-b from-sky-100 via-sky-50 to-transparent dark:from-sky-950 dark:via-sky-900/50 dark:to-transparent'
+              )} />
+              {/* Sun/stars based on session count */}
+              {completedToday.length >= 3 && (
+                <motion.div className="absolute top-3 right-6 w-8 h-8 rounded-full bg-amber-300 dark:bg-amber-400/80"
+                  initial={{ scale: 0 }} animate={{ scale: 1 }}
+                  style={{ boxShadow: '0 0 20px 8px rgba(251,191,36,0.3)' }} />
+              )}
+              {/* Grass */}
+              <div className="absolute bottom-0 inset-x-0 h-10 bg-gradient-to-t from-green-500/70 to-green-400/40 dark:from-green-800/70 dark:to-green-700/30" />
+              {/* Grass texture dots */}
+              <div className="absolute bottom-0 inset-x-0 h-3 flex justify-around items-end px-4">
+                {Array.from({ length: 20 }, (_, i) => (
+                  <div key={i} className="w-0.5 bg-green-600/40 dark:bg-green-500/30 rounded-full"
+                    style={{ height: 3 + Math.random() * 6 }} />
+                ))}
+              </div>
+              {/* Trees on the grass */}
+              <div className="relative flex items-end justify-around px-4 pb-2" style={{ minHeight: 140 }}>
+                {completedToday.map((s, i) => (
+                  <motion.div key={s.id}
+                    initial={{ opacity: 0, y: 20, scale: 0.5 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ delay: i * 0.12, type: 'spring', stiffness: 200 }}
+                    className="flex flex-col items-center"
+                    title={`${formatDuration(s.actual_seconds)} · ${s.tree_species}`}
+                  >
+                    <TreeComponent species={s.tree_species} stage={1} size={completedToday.length > 6 ? 48 : 64} />
+                    <span className="text-[9px] text-muted-foreground mt-0.5">{formatDuration(s.actual_seconds)}</span>
+                  </motion.div>
+                ))}
+                {/* Dead trees (abandoned) */}
+                {(todaySessionsQ.data ?? []).filter(s => s.status === 'abandoned').map((s, i) => (
+                  <motion.div key={s.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 0.45 }}
+                    transition={{ delay: completedToday.length * 0.12 + i * 0.08 }}
+                    className="flex flex-col items-center"
+                    title={`Abandoned after ${formatDuration(s.actual_seconds)}`}
+                  >
+                    <TreeComponent species={s.tree_species}
+                      stage={Math.min(s.actual_seconds / (s.duration_seconds || 1500), 0.7)} dead size={36} />
+                  </motion.div>
+                ))}
+              </div>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* All-Time Forest */}
+      {allSessionsQ.data && allSessionsQ.data.filter(s => s.status === 'completed').length > 0 && (
+        <IsometricForest sessions={allSessionsQ.data.filter(s => s.status === 'completed')} />
+      )}
 
       {/* Stats Card */}
       {statsQ.data && statsQ.data.totalSessions > 0 && (
