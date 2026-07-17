@@ -44,17 +44,20 @@ const PHASE_CONFIG: Record<Phase, { color: string; gradient: string; emoji: stri
 // ---- Core Calculations ----
 
 function daysBetween(a: string, b: string): number {
-  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
+  const da = new Date(a + 'T00:00:00');
+  const db = new Date(b + 'T00:00:00');
+  return Math.round((db.getTime() - da.getTime()) / 86400000);
 }
 
 function addDays(date: string, days: number): string {
   const d = new Date(date + 'T00:00:00');
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /** Get full cycle lengths (time between consecutive period starts) */
@@ -133,9 +136,9 @@ export function predictNextPeriod(cycles: Cycle[]): Prediction | null {
 }
 
 /** Get current phase based on last cycle start */
-export function getCurrentPhase(lastCycleStart: string, avgCycleLength: number = 28): PhaseInfo {
+export function getCurrentPhase(lastCycleStart: string, avgCycleLength: number = 28, avgPeriodLen: number = 5): PhaseInfo {
   const dayInCycle = daysBetween(lastCycleStart, today()) + 1;
-  const periodLen = 5;
+  const periodLen = avgPeriodLen;
   const ovulationDay = Math.round(avgCycleLength - 14);
 
   let phase: Phase;
@@ -207,9 +210,10 @@ const QUOTES: Record<Phase, string[]> = {
 };
 
 export function getPhaseQuote(phase: Phase): string {
-  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  const now = new Date();
+  const hourSlot = Math.floor(now.getTime() / 3600000); // changes every hour
   const quotes = QUOTES[phase];
-  return quotes[dayOfYear % quotes.length];
+  return quotes[hourSlot % quotes.length];
 }
 
 // ---- Helpers for calendar/display ----

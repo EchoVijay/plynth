@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { BookOpen, Briefcase, CheckSquare, Wallet, ArrowRight, Sparkles, Flame, Receipt, Timer } from 'lucide-react';
+import { BookOpen, Briefcase, CheckSquare, Wallet, ArrowRight, Sparkles, Flame, Receipt, Timer, CalendarDays, Heart, CreditCard, Droplets, Moon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Loader';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { formatINR } from '@/lib/utils';
 import { isPageEnabled } from '@/app/AppShell';
+import { getCurrentPhase, predictNextPeriod, type Cycle } from '@/lib/period-utils';
 
 const QUOTES = [
   'Small steps every day beat giant leaps once a year.',
@@ -20,7 +21,8 @@ const QUOTES = [
 export function DashboardPage() {
   const { session } = useSession();
   const userId = session?.user.id;
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const quote = QUOTES[new Date().getDate() % QUOTES.length];
 
   const profileQ = useQuery({
@@ -123,6 +125,68 @@ export function DashboardPage() {
     },
   });
 
+  const eventsQ = useQuery({
+    queryKey: ['dashboard', 'events', userId, today],
+    enabled: !!userId && isPageEnabled(ep, 'calendar'),
+    queryFn: async () => {
+      const { data } = await supabase.from('calendar_events').select('title,event_time')
+        .eq('user_id', userId!).eq('event_date', today).order('event_time', { ascending: true });
+      const events = data ?? [];
+      const next = events.find(e => e.event_time) ?? events[0];
+      return { count: events.length, nextTitle: next?.title ?? null, nextTime: next?.event_time?.slice(0, 5) ?? null };
+    },
+  });
+
+  const periodQ = useQuery({
+    queryKey: ['dashboard', 'period', userId],
+    enabled: !!userId && isPageEnabled(ep, 'period_tracker'),
+    queryFn: async () => {
+      const { data } = await supabase.from('period_cycles').select('*')
+        .eq('user_id', userId!).order('start_date', { ascending: false }).limit(12);
+      const cycles = (data ?? []) as Cycle[];
+      if (!cycles.length) return null;
+      const prediction = predictNextPeriod(cycles);
+      const phase = getCurrentPhase(cycles[0].start_date, prediction?.avgCycleLength ?? 28, prediction?.avgPeriodLength ?? 5);
+      return { phase, daysUntil: prediction?.daysUntilPeriod ?? null };
+    },
+  });
+
+  const subsQ = useQuery({
+    queryKey: ['dashboard', 'subscriptions', userId],
+    enabled: !!userId && isPageEnabled(ep, 'subscriptions'),
+    queryFn: async () => {
+      const { data } = await supabase.from('subscriptions').select('name,amount,billing_cycle,next_renewal_date')
+        .eq('user_id', userId!).eq('status', 'active').order('next_renewal_date');
+      const subs = data ?? [];
+      const monthlyBurn = subs.reduce((s, sub) => {
+        const m = sub.billing_cycle === 'yearly' ? 12 : sub.billing_cycle === 'quarterly' ? 3 : 1;
+        return s + Number(sub.amount) / m;
+      }, 0);
+      const next = subs[0];
+      return { monthlyBurn: Math.round(monthlyBurn), nextName: next?.name ?? null, nextDate: next?.next_renewal_date ?? null };
+    },
+  });
+
+  const waterQ = useQuery({
+    queryKey: ['dashboard', 'water', userId, today],
+    enabled: !!userId && isPageEnabled(ep, 'wellness'),
+    queryFn: async () => {
+      const { data } = await supabase.from('water_logs').select('glasses,goal')
+        .eq('user_id', userId!).eq('log_date', today).maybeSingle();
+      return { glasses: data?.glasses ?? 0, goal: data?.goal ?? 8 };
+    },
+  });
+
+  const sleepDashQ = useQuery({
+    queryKey: ['dashboard', 'sleep', userId, today],
+    enabled: !!userId && isPageEnabled(ep, 'wellness'),
+    queryFn: async () => {
+      const { data } = await supabase.from('sleep_logs').select('total_hours,quality')
+        .eq('user_id', userId!).eq('log_date', today).maybeSingle();
+      return data ? { hours: data.total_hours, quality: data.quality } : null;
+    },
+  });
+
   const allCards = [
     {
       id: 'learning', pageKey: 'learning', to: '/learning', label: "Today's Learning", icon: BookOpen, gradient: 'from-violet-500 to-fuchsia-500',
@@ -162,6 +226,36 @@ export function DashboardPage() {
       value: focusQ.data ? `${focusQ.data.sessions} 🌳` : '—',
       sub: focusQ.data ? `${Math.round(focusQ.data.totalSec / 60)}m focused` : '',
       loading: focusQ.isLoading,
+    },
+    {
+      id: 'events', pageKey: 'calendar', to: '/calendar', label: "Today's Events", icon: CalendarDays, gradient: 'from-blue-500 to-indigo-500',
+      value: eventsQ.data ? `${eventsQ.data.count}` : '—',
+      sub: eventsQ.data?.nextTitle ? `${eventsQ.data.nextTime ? eventsQ.data.nextTime + ' ' : ''}${eventsQ.data.nextTitle}` : 'No events today',
+      loading: eventsQ.isLoading,
+    },
+    {
+      id: 'period', pageKey: 'period_tracker', to: '/period', label: 'Cycle Phase', icon: Heart, gradient: 'from-rose-500 to-pink-500',
+      value: periodQ.data ? `${periodQ.data.phase.emoji} ${periodQ.data.phase.label.split(' ')[0]}` : '—',
+      sub: periodQ.data ? (periodQ.data.phase.phase === 'menstrual' ? `Day ${periodQ.data.phase.dayInPhase}` : periodQ.data.daysUntil !== null && periodQ.data.daysUntil > 0 ? `${periodQ.data.daysUntil}d until period` : `Day ${periodQ.data.phase.dayInCycle}`) : '',
+      loading: periodQ.isLoading,
+    },
+    {
+      id: 'subscriptions', pageKey: 'subscriptions', to: '/subscriptions', label: 'Subscriptions', icon: CreditCard, gradient: 'from-purple-500 to-violet-500',
+      value: subsQ.data ? formatINR(subsQ.data.monthlyBurn) + '/mo' : '—',
+      sub: subsQ.data?.nextName ? `${subsQ.data.nextName} renews soon` : 'No active subs',
+      loading: subsQ.isLoading,
+    },
+    {
+      id: 'water', pageKey: 'wellness', to: '/wellness', label: 'Hydration', icon: Droplets, gradient: 'from-cyan-500 to-sky-500',
+      value: waterQ.data ? `${waterQ.data.glasses}/${waterQ.data.goal}` : '—',
+      sub: waterQ.data ? (waterQ.data.glasses >= waterQ.data.goal ? '✅ Goal met!' : `${waterQ.data.goal - waterQ.data.glasses} glasses to go`) : 'glasses',
+      loading: waterQ.isLoading,
+    },
+    {
+      id: 'sleep', pageKey: 'wellness', to: '/wellness', label: 'Last Night', icon: Moon, gradient: 'from-indigo-500 to-blue-500',
+      value: sleepDashQ.data ? `${sleepDashQ.data.hours}h` : '—',
+      sub: sleepDashQ.data?.quality ? `${'⭐'.repeat(sleepDashQ.data.quality)}` : 'Not logged',
+      loading: sleepDashQ.isLoading,
     },
   ];
 

@@ -12,6 +12,9 @@ import { Button } from '@/components/ui/Button';
 import { Input, Label } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/Dialog';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/Popover';
+import { Calendar } from '@/components/ui/Calendar';
+import { format, parse } from 'date-fns';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { cn } from '@/lib/utils';
@@ -62,7 +65,7 @@ const RECURRENCE_OPTIONS = [
   { value: 'yearly', label: 'Yearly' },
 ];
 
-function todayStr() { return new Date().toISOString().slice(0, 10); }
+function todayStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 
 function getCatConfig(cat: string) { return CATEGORIES.find(c => c.id === cat) ?? CATEGORIES[0]; }
 
@@ -609,7 +612,21 @@ function EventDialog({ open, onClose, existing, defaultDate, onSave, saving }: {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Date</Label>
-              <Input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} />
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn('w-full justify-start text-left font-normal h-9 px-3', !eventDate && 'text-muted-foreground')}>
+                    <CalendarDays className="mr-2 h-4 w-4" />
+                    {eventDate ? format(parse(eventDate, 'yyyy-MM-dd', new Date()), 'MMM d, yyyy') : 'Pick a date'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0">
+                  <Calendar mode="single"
+                    selected={eventDate ? parse(eventDate, 'yyyy-MM-dd', new Date()) : undefined}
+                    onSelect={(d) => setEventDate(d ? format(d, 'yyyy-MM-dd') : '')}
+                    defaultMonth={eventDate ? parse(eventDate, 'yyyy-MM-dd', new Date()) : undefined}
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="space-y-1.5">
               <Label>Time <span className="text-muted-foreground font-normal">(optional)</span></Label>
@@ -619,7 +636,21 @@ function EventDialog({ open, onClose, existing, defaultDate, onSave, saving }: {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>End date <span className="text-muted-foreground font-normal">(opt.)</span></Label>
-              <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn('w-full justify-start text-left font-normal h-9 px-3', !endDate && 'text-muted-foreground')}>
+                    <CalendarDays className="mr-2 h-4 w-4" />
+                    {endDate ? format(parse(endDate, 'yyyy-MM-dd', new Date()), 'MMM d, yyyy') : 'End date'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0">
+                  <Calendar mode="single"
+                    selected={endDate ? parse(endDate, 'yyyy-MM-dd', new Date()) : undefined}
+                    onSelect={(d) => setEndDate(d ? format(d, 'yyyy-MM-dd') : '')}
+                    defaultMonth={endDate ? parse(endDate, 'yyyy-MM-dd', new Date()) : eventDate ? parse(eventDate, 'yyyy-MM-dd', new Date()) : undefined}
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="space-y-1.5">
               <Label>End time <span className="text-muted-foreground font-normal">(opt.)</span></Label>
@@ -632,7 +663,13 @@ function EventDialog({ open, onClose, existing, defaultDate, onSave, saving }: {
             <Label>Category</Label>
             <div className="flex gap-2 flex-wrap">
               {CATEGORIES.map(c => (
-                <button key={c.id} onClick={() => setCategory(c.id)}
+                <button key={c.id} onClick={() => {
+                  setCategory(c.id);
+                  if (c.id === 'birthday') {
+                    setRecurrence('yearly');
+                    setReminders(r => r.includes(1440) ? r : [...r, 1440]);
+                  }
+                }}
                   className={cn('flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium border transition-all',
                     category === c.id ? cn(c.color, 'ring-1 ring-primary/40') : 'border-border hover:bg-muted')}>
                   <span>{c.emoji}</span> {c.label}

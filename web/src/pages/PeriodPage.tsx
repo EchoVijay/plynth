@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Heart, Droplets, ChevronLeft, ChevronRight, Plus, Calendar as CalIcon,
   Sparkles, Moon, Sun, Zap, Smile, Frown, Meh, CloudRain,
-  Trash2, Download, History, Edit2,
+  Trash2, Download, History, Edit2, CalendarDays,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -12,6 +12,9 @@ import { Button } from '@/components/ui/Button';
 import { Input, Label } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/Dialog';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/Popover';
+import { Calendar } from '@/components/ui/Calendar';
+import { format, parse } from 'date-fns';
 import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { cn } from '@/lib/utils';
@@ -118,10 +121,12 @@ export function PeriodPage() {
   const cycles = cyclesQ.data ?? [];
   const prediction = useMemo(() => predictNextPeriod(cycles), [cycles]);
   const lastCycle = cycles[0];
+  const ongoingCycle = lastCycle && !lastCycle.end_date ? lastCycle : null;
   const phaseInfo = useMemo(() => {
     if (!lastCycle) return null;
     const avg = prediction?.avgCycleLength ?? 28;
-    return getCurrentPhase(lastCycle.start_date, avg);
+    const avgPeriod = prediction?.avgPeriodLength ?? 5;
+    return getCurrentPhase(lastCycle.start_date, avg, avgPeriod);
   }, [lastCycle, prediction]);
 
   // ---- Mutations ----
@@ -136,6 +141,35 @@ export function PeriodPage() {
       qc.invalidateQueries({ queryKey: ['period-cycles', userId] });
       toast.success('Period logged! 🌸');
       setShowLogPeriod(false);
+    },
+  });
+
+  const startPeriodM = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from('period_cycles').insert({
+        user_id: userId!, start_date: today(), end_date: null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['period-cycles', userId] });
+      qc.invalidateQueries({ queryKey: ['period-logs'] });
+      toast.success('Period started. Take care! 💕');
+    },
+  });
+
+  const endPeriodM = useMutation({
+    mutationFn: async () => {
+      if (!ongoingCycle) return;
+      const { error } = await supabase.from('period_cycles').update({
+        end_date: today(), updated_at: new Date().toISOString(),
+      }).eq('id', ongoingCycle.id).eq('user_id', userId!);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['period-cycles', userId] });
+      qc.invalidateQueries({ queryKey: ['period-logs'] });
+      toast.success('Period ended! Yay! 🌸');
     },
   });
 
@@ -254,15 +288,19 @@ export function PeriodPage() {
               <p className="text-sm mt-2 opacity-90 max-w-md italic">"{getPhaseQuote(phaseInfo.phase)}"</p>
             </div>
             <div className="text-right">
-              {prediction && prediction.daysUntilPeriod > 0 ? (
+              {phaseInfo.phase === 'menstrual' ? (
+                <div>
+                  <p className="text-lg font-semibold">On period</p>
+                  <p className="text-xs opacity-80">Day {phaseInfo.dayInPhase} of {phaseInfo.totalPhaseDays} 💕</p>
+                </div>
+              ) : prediction && prediction.daysUntilPeriod > 0 ? (
                 <div>
                   <p className="text-3xl font-bold">{prediction.daysUntilPeriod}</p>
                   <p className="text-xs opacity-80">days until period</p>
                 </div>
               ) : (
                 <div>
-                  <p className="text-lg font-semibold">On period</p>
-                  <p className="text-xs opacity-80">Take care of yourself 💕</p>
+                  <p className="text-lg font-semibold">Cycle day {phaseInfo.dayInCycle}</p>
                 </div>
               )}
             </div>
@@ -438,8 +476,25 @@ export function PeriodPage() {
 
       {/* Quick Actions */}
       <div className="flex gap-2 flex-wrap">
+        {ongoingCycle ? (
+          <Button
+            onClick={() => endPeriodM.mutate()}
+            disabled={endPeriodM.isPending}
+            className="bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white gap-2"
+          >
+            <span className="text-lg">😊</span> Period Ended
+          </Button>
+        ) : (
+          <Button
+            onClick={() => startPeriodM.mutate()}
+            disabled={startPeriodM.isPending}
+            className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white gap-2"
+          >
+            <span className="text-lg">😣</span> Period Started
+          </Button>
+        )}
         <Button onClick={() => setShowLogPeriod(true)} variant="outline" className="text-rose-600 border-rose-200">
-          <Droplets className="h-4 w-4" /> Log Period Start/End
+          <Droplets className="h-4 w-4" /> Log Past Period
         </Button>
         <Button onClick={handleExport} variant="outline" className="text-violet-600 border-violet-200">
           <Download className="h-4 w-4" /> Export Data
@@ -772,11 +827,39 @@ function LogPeriodDialog({ open, onClose, onSave }: { open: boolean; onClose: ()
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label>Start date</Label>
-            <Input type="date" value={start} onChange={e => setStart(e.target.value)} />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className={cn('w-full justify-start text-left font-normal h-9 px-3', !start && 'text-muted-foreground')}>
+                  <CalendarDays className="mr-2 h-4 w-4" />
+                  {start ? format(parse(start, 'yyyy-MM-dd', new Date()), 'MMM d, yyyy') : 'Pick a date'}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0">
+                <Calendar mode="single"
+                  selected={start ? parse(start, 'yyyy-MM-dd', new Date()) : undefined}
+                  onSelect={(d) => setStart(d ? format(d, 'yyyy-MM-dd') : '')}
+                  defaultMonth={start ? parse(start, 'yyyy-MM-dd', new Date()) : undefined}
+                />
+              </PopoverContent>
+            </Popover>
           </div>
           <div className="space-y-1.5">
             <Label>End date (leave empty if still ongoing)</Label>
-            <Input type="date" value={end} onChange={e => setEnd(e.target.value)} />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className={cn('w-full justify-start text-left font-normal h-9 px-3', !end && 'text-muted-foreground')}>
+                  <CalendarDays className="mr-2 h-4 w-4" />
+                  {end ? format(parse(end, 'yyyy-MM-dd', new Date()), 'MMM d, yyyy') : 'End date (optional)'}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0">
+                <Calendar mode="single"
+                  selected={end ? parse(end, 'yyyy-MM-dd', new Date()) : undefined}
+                  onSelect={(d) => setEnd(d ? format(d, 'yyyy-MM-dd') : '')}
+                  defaultMonth={end ? parse(end, 'yyyy-MM-dd', new Date()) : start ? parse(start, 'yyyy-MM-dd', new Date()) : undefined}
+                />
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
         <DialogFooter>

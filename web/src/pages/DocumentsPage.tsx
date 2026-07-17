@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText, Upload, Download, Trash2, Plus, Search, Filter,
-  Image, File, FileSpreadsheet, Eye, X, FolderOpen,
+  Image, File, FileSpreadsheet, Eye, X, FolderOpen, Pencil, Check,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -70,6 +70,8 @@ export function DocumentsPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewMime, setPreviewMime] = useState('');
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   // ---- Query ----
   const docsQ = useQuery({
@@ -129,6 +131,20 @@ export function DocumentsPage() {
       toast.success('Document deleted');
     },
     onError: (e: any) => toast.error(e.message || 'Delete failed'),
+  });
+
+  // ---- Rename mutation ----
+  const renameM = useMutation({
+    mutationFn: async ({ id, title }: { id: string; title: string }) => {
+      const { error } = await supabase.from('documents').update({ title }).eq('id', id).eq('user_id', userId!);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['documents', userId] });
+      setRenamingId(null);
+      toast.success('Renamed!');
+    },
+    onError: (e: any) => toast.error(e.message || 'Rename failed'),
   });
 
   // ---- Download ----
@@ -254,7 +270,21 @@ export function DocumentsPage() {
                       </div>
                       {/* Info */}
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-sm truncate">{doc.title}</h3>
+                        {renamingId === doc.id ? (
+                          <form onSubmit={e => { e.preventDefault(); if (renameValue.trim()) renameM.mutate({ id: doc.id, title: renameValue.trim() }); }} className="flex items-center gap-1">
+                            <input
+                              autoFocus
+                              value={renameValue}
+                              onChange={e => setRenameValue(e.target.value)}
+                              onBlur={() => { if (renameValue.trim() && renameValue.trim() !== doc.title) renameM.mutate({ id: doc.id, title: renameValue.trim() }); else setRenamingId(null); }}
+                              onKeyDown={e => { if (e.key === 'Escape') setRenamingId(null); }}
+                              className="flex-1 px-1.5 py-0.5 rounded border border-primary bg-background text-sm font-medium"
+                            />
+                            <button type="submit" className="p-0.5 rounded hover:bg-muted"><Check className="h-3.5 w-3.5 text-emerald-500" /></button>
+                          </form>
+                        ) : (
+                          <h3 className="font-medium text-sm truncate">{doc.title}</h3>
+                        )}
                         <div className="flex items-center gap-2 mt-1">
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0">{getCategoryBadge(doc.category)}</Badge>
                           <span className="text-[10px] text-muted-foreground">{formatBytes(doc.size_bytes)}</span>
@@ -268,6 +298,9 @@ export function DocumentsPage() {
                       </div>
                       {/* Actions */}
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setRenamingId(doc.id); setRenameValue(doc.title); }} className="p-1.5 rounded hover:bg-muted" title="Rename">
+                          <Pencil className="h-4 w-4 text-muted-foreground" />
+                        </button>
                         {doc.mime_type.startsWith('image/') || doc.mime_type.includes('pdf') ? (
                           <button onClick={() => handlePreview(doc)} className="p-1.5 rounded hover:bg-muted" title="Preview">
                             <Eye className="h-4 w-4 text-muted-foreground" />
