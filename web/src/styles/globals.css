@@ -99,3 +99,85 @@
 }
 .tiptap-editor .tiptap pre code { background: none; padding: 0; }
 .tiptap-editor .tiptap mark { border-radius: 0.15em; padding: 0.05em 0; }
+
+/* ===== Modern Scrollbar ===== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 9999px;
+  transition: background 0.2s;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.scrollbar-thin { scrollbar-width: thin; }
+.scrollbar-hidden { scrollbar-width: none; }
+.scrollbar-hidden::-webkit-scrollbar { display: none; }
+
+/* ===== Modern Date/Time Input Styling ===== */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+}
+:root input[type="date"],
+:root input[type="time"],
+:root input[type="datetime-local"] {
+  color-scheme: light;
+}
+.dark input[type="date"],
+.dark input[type="time"],
+.dark input[type="datetime-local"] {
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  opacity: 0.6;
+  cursor: pointer;
+}
+.dark input[type="date"]::-webkit-calendar-picker-indicator,
+.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.5;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+/* Splash screen sparkle particles */
+.splash-particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #a5b4fc;
+  opacity: 0;
+  animation: sparkle-out 1s ease-out forwards;
+  animation-delay: var(--delay, 2s);
+}
+@keyframes sparkle-out {
+  0% { transform: translate(0, 0) scale(1); opacity: 0.9; }
+  100% {
+    transform: translate(
+      calc(cos(var(--angle)) * 120px),
+      calc(sin(var(--angle)) * 120px)
+    ) scale(0);
+    opacity: 0;
+  }
+}

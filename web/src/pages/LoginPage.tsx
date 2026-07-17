@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Input, Label } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { SplashScreen } from '@/components/SplashScreen';
 import { supabase } from '@/lib/supabase';
 
 export function LoginPage() {
@@ -12,6 +13,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [busy, setBusy] = useState(false);
+  const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('plynth_splash_seen'));
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: Location })?.from?.pathname || '/';
@@ -40,7 +42,23 @@ export function LoginPage() {
 
   return (
     <div className="min-h-screen grid place-items-center px-4 bg-gradient-to-br from-background via-background to-primary/5">
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
+      <AnimatePresence mode="wait">
+        {showSplash ? (
+          <SplashScreen
+            key="splash"
+            onDone={() => {
+              sessionStorage.setItem('plynth_splash_seen', '1');
+              setShowSplash(false);
+            }}
+          />
+        ) : (
+          <motion.div
+            key="login"
+            initial={{ opacity: 0, scale: 0.95, filter: 'blur(4px)' }}
+            animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+            transition={{ duration: 0.6, ease: 'easeOut' }}
+            className="w-full max-w-md"
+          >
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -77,7 +95,9 @@ export function LoginPage() {
         <p className="text-xs text-muted-foreground text-center mt-4">
           Signup is restricted. Contact admin if you can't sign up.
         </p>
-      </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
