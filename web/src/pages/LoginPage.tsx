@@ -62,7 +62,7 @@ export function LoginPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
-              <div className="h-10 w-10 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">P</div>
+              <img src="/logo-128.png" alt="Plynth" width={40} height={40} className="h-10 w-10" />
               <div>
                 <CardTitle className="text-2xl">Plynth</CardTitle>
                 <CardDescription>Your personal AI dashboard</CardDescription>

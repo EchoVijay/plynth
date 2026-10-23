@@ -41,34 +41,16 @@ export function SplashScreen({ onDone }: { onDone: () => void }) {
         }}
       >
         <div style={{ transformStyle: 'preserve-3d' }}>
-          <svg width="96" height="96" viewBox="0 0 32 32" className="drop-shadow-2xl">
-            {/* Background rounded rect */}
-            <motion.rect
-              width="32" height="32" rx="8"
-              fill="#6366f1"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4 }}
-            />
-            {/* "P" letter — draw-on effect */}
-            <motion.path
-              d="M9 22V10h6a4 4 0 010 8h-3v4H9z"
-              fill="none"
-              stroke="white"
-              strokeWidth="1.5"
-              initial={{ pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              transition={{ duration: 1, ease: 'easeInOut', delay: 0.3 }}
-            />
-            {/* Fill after stroke draws */}
-            <motion.path
-              d="M9 22V10h6a4 4 0 010 8h-3v4H9z"
-              fill="white"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4, delay: 1.1 }}
-            />
-          </svg>
+          <motion.img
+            src="/logo.png"
+            alt="Plynth"
+            width={112}
+            height={112}
+            className="h-28 w-28 drop-shadow-2xl"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4 }}
+          />
         </div>
       </motion.div>
 

@@ -134,7 +134,7 @@ export function AppShell() {
         className="hidden md:flex flex-col border-r bg-card sticky top-0 h-screen overflow-x-hidden"
       >
         <div className="flex items-center gap-2 px-4 h-16 border-b">
-          <div className="h-8 w-8 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">P</div>
+          <img src="/logo-128.png" alt="Plynth" width={32} height={32} className="h-8 w-8 shrink-0" />
           {!collapsed && <span className="font-semibold tracking-tight">Plynth</span>}
         </div>
         <nav className="flex-1 p-2 space-y-1 overflow-y-auto scrollbar-thin">
