@@ -4,6 +4,12 @@
 import { admin, json, corsHeaders, getSecret } from '../_shared/util.ts';
 import { sendTelegram, parseCommand, downloadFile, setWebhook, setMyCommands, type TelegramUpdate } from '../_shared/telegram.ts';
 import { aiVision } from '../_shared/ai-provider.ts';
+import { searchJobs, UpstreamError } from '../_shared/freehire.ts';
+import { sanitizeFilters } from '../_shared/pure/job-filters.ts';
+import { matchJob, normalizeSkill } from '../_shared/pure/job-match.ts';
+import { formatSalary } from '../_shared/pure/job-shape.ts';
+import { escapeTelegram } from '../_shared/pure/job-digest.ts';
+import { STAGES, STAGE_LABEL, isFollowUpDue, isQuiet, quietDays, type Stage } from '../_shared/pure/job-tracker.ts';
 
 // ---------- Helpers ----------
 
@@ -332,6 +338,48 @@ async function handleEmi(sb: ReturnType<typeof admin>, userId: string): Promise<
   return lines.join('\n');
 }
 
+async function handleJobs(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
+  const { data: prof } = await sb.from('job_profile')
+    .select('skills,experience_years,work_modes,countries,salary_min,salary_currency,resume_text').eq('user_id', userId).maybeSingle();
+  const q = args.trim();
+  const skills = (prof?.skills ?? []).map(normalizeSkill).filter(Boolean).slice(0, 5);
+  if (!q && !skills.length) return '💼 Usage: `/jobs <search>` — e.g. `/jobs react remote`\nTip: add skills in Jobs → Profile and `/jobs` alone will search for you.';
+
+  const wantsRemote = /\bremote\b/i.test(q);
+  const text = q.replace(/\bremote\b/gi, '').trim();
+  try {
+    const res = await searchJobs(sanitizeFilters({
+      q: text || undefined, skills: text ? undefined : skills, work_mode: wantsRemote ? ['remote'] : undefined,
+      countries: prof?.countries?.length ? prof.countries : ['in'], fresh_only: true, sort: 'newest',
+    }), { limit: 5 });
+    if (!res.jobs.length) return '💼 No fresh jobs found for that search. Try broader words.';
+    const lines = [`💼 *${res.total.toLocaleString('en-IN')} jobs* — top ${res.jobs.length}\n`];
+    for (const j of res.jobs) {
+      const m = prof ? matchJob(j, prof).score : null;
+      const bits = [j.company, j.location, j.work_mode, formatSalary(j.enrichment), m != null ? `${m}% match` : null].filter(Boolean).map((b) => escapeTelegram(String(b)));
+      lines.push(`• [${escapeTelegram(j.title)}](${j.url.replace(/\)/g, '%29')})\n  ${bits.join(' · ')}`);
+    }
+    return lines.join('\n');
+  } catch (e) {
+    return e instanceof UpstreamError ? '⚠️ The job search is busy right now. Try again in a minute.' : `⚠️ ${(e as Error).message}`;
+  }
+}
+
+async function handleApplied(sb: ReturnType<typeof admin>, userId: string): Promise<string> {
+  const { data } = await sb.from('job_applications')
+    .select('company,role,status,applied_date,follow_up_date,last_activity_at').eq('user_id', userId).limit(300);
+  const apps = data ?? [];
+  if (!apps.length) return '📋 No applications tracked yet. Add them in Jobs → Tracker.';
+  const now = new Date();
+  const counts = STAGES.map((st: Stage) => ({ st, n: apps.filter((a: any) => a.status === st).length })).filter((c) => c.n);
+  const lines = ['📋 *Applications*\n', counts.map((c) => `${STAGE_LABEL[c.st]}: ${c.n}`).join(' · ')];
+  const due = apps.filter((a: any) => isFollowUpDue(a, now)).slice(0, 5);
+  if (due.length) lines.push('\n⏰ *Follow up*', ...due.map((a: any) => `• ${escapeTelegram(a.role)} @ ${escapeTelegram(a.company)}`));
+  const quiet = apps.filter((a: any) => isQuiet(a, now)).slice(0, 5);
+  if (quiet.length) lines.push('\n🤫 *Gone quiet*', ...quiet.map((a: any) => `• ${escapeTelegram(a.role)} @ ${escapeTelegram(a.company)} (${quietDays(a, now)}d)`));
+  return lines.join('\n');
+}
+
 async function handleHabit(sb: ReturnType<typeof admin>, userId: string, args: string): Promise<string> {
   if (!args) {
     // Show today's habits status
@@ -563,6 +611,8 @@ function helpText(): string {
     '`/event <date> [category] <title>` — Add event',
     '`/today` — Today\'s summary',
     '`/emi` — Active EMI summary',
+    '`/jobs [search]` — Fresh job matches, e.g. `/jobs react remote`',
+    '`/applied` — Application stages, follow-ups and quiet ones',
     '`/link <code>` — Link your Plynth account',
     '`/unlink` — Unlink account',
     '`/help` — Show this message',
@@ -606,6 +656,8 @@ Deno.serve(async (req) => {
         { command: 'focus', description: 'Today\'s focus sessions' },
         { command: 'today', description: 'Today\'s summary' },
         { command: 'emi', description: 'Active EMI summary' },
+        { command: 'jobs', description: 'Find jobs — /jobs react remote' },
+        { command: 'applied', description: 'Application tracker summary' },
         { command: 'link', description: 'Link Plynth account — /link CODE' },
         { command: 'unlink', description: 'Unlink account' },
         { command: 'help', description: 'Show all commands' },
@@ -661,6 +713,8 @@ Deno.serve(async (req) => {
         case 'event': result = await handleEvent(sb, userId, cmd.args); break;
         case 'today': result = await handleToday(sb, userId); break;
         case 'emi': result = await handleEmi(sb, userId); break;
+        case 'jobs': result = await handleJobs(sb, userId, cmd.args); break;
+        case 'applied': result = await handleApplied(sb, userId); break;
         case 'habit': result = await handleHabit(sb, userId, cmd.args); break;
         case 'expense': result = await handleExpense(sb, userId, cmd.args); break;
         case 'sub': result = await handleSub(sb, userId, cmd.args); break;

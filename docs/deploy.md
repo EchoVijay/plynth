@@ -14,8 +14,10 @@ supabase link --project-ref <your-project-ref>
 supabase db push
 
 # Set vault secrets (used by edge functions)
-supabase secrets set GEMINI_API_KEY=<key>
-supabase secrets set RAPIDAPI_JSEARCH_KEY=<key>
+supabase secrets set GEMINI_API_KEY=<key>          # free tier is ~20 requests/day; used for PDF/photo reading
+supabase secrets set GROQ_API_KEY=<key>
+supabase secrets set GROQ_MODEL_PRIMARY=openai/gpt-oss-120b
+supabase secrets set GROQ_MODEL_FAST=openai/gpt-oss-20b
 supabase secrets set RESEND_API_KEY=<key>
 supabase secrets set RESEND_FROM='Plynth <onboarding@resend.dev>'
 supabase secrets set MAIL_DEFAULT_TO=vijay.devops.bot@gmail.com
@@ -28,7 +30,7 @@ supabase secrets set SERVICE_ROLE_KEY=<service role key>
 
 # Deploy edge functions
 supabase functions deploy ai-learning-plan
-supabase functions deploy fetch-jobs
+supabase functions deploy jobs-api job-ai job-digest   # Jobs workspace, see docs/jobs.md
 supabase functions deploy send-reminder --no-verify-jwt
 supabase functions deploy send-mail --no-verify-jwt
 

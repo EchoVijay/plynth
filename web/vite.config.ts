@@ -33,7 +33,10 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@shared': path.resolve(__dirname, '../supabase/functions/_shared/pure'),
+    },
   },
-  server: { port: 5173, host: true, allowedHosts: true },
+  server: { port: 5173, host: true, allowedHosts: true, fs: { allow: ['..'] } },
 });

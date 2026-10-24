@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { useSession } from '@/app/useSession';
 import { formatINR } from '@/lib/utils';
 import { isPageEnabled } from '@/app/AppShell';
+import { ACTIVE_STAGES, isFollowUpDue, isQuiet, type Stage } from '@shared/job-tracker.ts';
 import { getCurrentPhase, predictNextPeriod, type Cycle } from '@/lib/period-utils';
 
 const QUOTES = [
@@ -48,8 +49,16 @@ export function DashboardPage() {
     queryKey: ['dashboard', 'jobs', userId],
     enabled: !!userId && isPageEnabled(ep, 'jobs'),
     queryFn: async () => {
-      const { count } = await supabase.from('job_listings').select('*', { count: 'exact', head: true }).eq('user_id', userId!).eq('is_new', true);
-      return count ?? 0;
+      const { data } = await supabase.from('job_applications')
+        .select('status,applied_date,follow_up_date,last_activity_at').eq('user_id', userId!).limit(500);
+      const apps = data ?? [];
+      const now = new Date();
+      return {
+        active: apps.filter(a => ACTIVE_STAGES.includes(a.status as Stage)).length,
+        interviews: apps.filter(a => a.status === 'interview').length,
+        attention: apps.filter(a => isFollowUpDue(a, now) || isQuiet(a, now)).length,
+        total: apps.length,
+      };
     },
   });
 
@@ -194,8 +203,11 @@ export function DashboardPage() {
       loading: learningQ.isLoading,
     },
     {
-      id: 'jobs', pageKey: 'jobs', to: '/jobs', label: 'New Jobs', icon: Briefcase, gradient: 'from-sky-500 to-cyan-500',
-      value: jobsQ.data?.toString() ?? '—', sub: 'fresh listings',
+      id: 'jobs', pageKey: 'jobs', to: '/jobs?tab=tracker', label: 'Job Search', icon: Briefcase, gradient: 'from-sky-500 to-cyan-500',
+      value: jobsQ.data ? jobsQ.data.active.toString() : '—',
+      sub: jobsQ.data
+        ? (jobsQ.data.total === 0 ? 'no applications yet' : `active · ${jobsQ.data.interviews} interviewing${jobsQ.data.attention ? ` · ${jobsQ.data.attention} need attention` : ''}`)
+        : 'active applications',
       loading: jobsQ.isLoading,
     },
     {

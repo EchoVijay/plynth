@@ -19,8 +19,8 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] },
+    "paths": { "@/*": ["./src/*"], "@shared/*": ["../supabase/functions/_shared/pure/*"] },
     "types": ["vite/client", "vite-plugin-pwa/client", "node"]
   },
-  "include": ["src"]
+  "include": ["src", "../supabase/functions/_shared/pure"]
 }

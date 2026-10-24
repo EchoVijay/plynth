@@ -38,9 +38,13 @@ enable_confirmations = false
 verify_jwt = false
 [functions.chat]
 verify_jwt = false
-[functions.fetch-jobs]
-verify_jwt = false
 [functions.send-reminder]
 verify_jwt = false
 [functions.send-mail]
+verify_jwt = false
+[functions.jobs-api]
+verify_jwt = false
+[functions.job-ai]
+verify_jwt = false
+[functions.job-digest]
 verify_jwt = false

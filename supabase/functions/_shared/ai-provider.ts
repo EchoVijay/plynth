@@ -9,9 +9,17 @@ import { geminiJSON, geminiVision } from './gemini.ts';
 import { groqJSON, groqText, groqVision, RateLimitError } from './groq.ts';
 import { ollamaJSON, ollamaText } from './ollama.ts';
 
-type Provider = 'gemini' | 'groq' | 'ollama';
+export type Provider = 'gemini' | 'groq' | 'ollama';
 
-async function resolveChain(): Promise<Provider[]> {
+export interface AiOptions {
+  /** Try these providers first, in order, instead of the configured chain. */
+  providers?: Provider[];
+  /** Per-call timeout for Gemini on long structured outputs. */
+  timeoutMs?: number;
+}
+
+async function resolveChain(opts?: AiOptions): Promise<Provider[]> {
+  if (opts?.providers?.length) return opts.providers;
   const mode = ((await getSecret('AI_PROVIDER')) || 'chain').toLowerCase();
   if (mode === 'chain') {
     const chain = ((await getSecret('AI_PROVIDER_CHAIN')) || 'groq,ollama')
@@ -23,20 +31,20 @@ async function resolveChain(): Promise<Provider[]> {
   return [mode as Provider];
 }
 
-async function tryJSON<T>(provider: Provider, prompt: string, schemaHint: string): Promise<T> {
+async function tryJSON<T>(provider: Provider, prompt: string, schemaHint: string, opts?: AiOptions): Promise<T> {
   switch (provider) {
     case 'groq':
       return await groqJSON<T>(prompt, schemaHint);
     case 'ollama':
       return await ollamaJSON<T>(prompt, schemaHint);
     case 'gemini':
-      return await geminiJSON<T>(prompt, schemaHint);
+      return await geminiJSON<T>(prompt, schemaHint, { timeoutMs: opts?.timeoutMs });
     default:
       throw new Error(`Unknown AI provider: ${provider}`);
   }
 }
 
-async function tryText(provider: Provider, prompt: string, system?: string): Promise<string> {
+async function tryText(provider: Provider, prompt: string, system?: string, opts?: AiOptions): Promise<string> {
   switch (provider) {
     case 'groq':
       return await groqText(prompt, system);
@@ -46,6 +54,7 @@ async function tryText(provider: Provider, prompt: string, system?: string): Pro
       const r = await geminiJSON<{ text: string }>(
         `${system ? system + '\n\n' : ''}${prompt}`,
         '{"text": "..."}',
+        { timeoutMs: opts?.timeoutMs },
       );
       return r.text;
     }
@@ -62,12 +71,12 @@ function isRetryable(err: unknown): boolean {
   );
 }
 
-export async function aiJSON<T>(prompt: string, schemaHint: string): Promise<T> {
-  const chain = await resolveChain();
+export async function aiJSON<T>(prompt: string, schemaHint: string, opts?: AiOptions): Promise<T> {
+  const chain = await resolveChain(opts);
   let lastErr: unknown = null;
   for (const p of chain) {
     try {
-      const out = await tryJSON<T>(p, prompt, schemaHint);
+      const out = await tryJSON<T>(p, prompt, schemaHint, opts);
       console.log(`[ai-provider] ${p} ok`);
       return out;
     } catch (e) {
@@ -79,12 +88,12 @@ export async function aiJSON<T>(prompt: string, schemaHint: string): Promise<T> 
   throw lastErr instanceof Error ? lastErr : new Error('All AI providers failed');
 }
 
-export async function aiText(prompt: string, system?: string): Promise<string> {
-  const chain = await resolveChain();
+export async function aiText(prompt: string, system?: string, opts?: AiOptions): Promise<string> {
+  const chain = await resolveChain(opts);
   let lastErr: unknown = null;
   for (const p of chain) {
     try {
-      const out = await tryText(p, prompt, system);
+      const out = await tryText(p, prompt, system, opts);
       console.log(`[ai-provider] ${p} ok (text)`);
       return out;
     } catch (e) {

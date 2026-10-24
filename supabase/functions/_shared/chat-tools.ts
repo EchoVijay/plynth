@@ -2,6 +2,10 @@
 // Every tool is automatically scoped to the caller's user_id.
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { getJob, searchJobs } from './freehire.ts';
+import { sanitizeFilters } from './pure/job-filters.ts';
+import { matchJob } from './pure/job-match.ts';
+import { formatSalary } from './pure/job-shape.ts';
 
 type Tool = {
   name: string;
@@ -134,23 +138,65 @@ export const TOOLS: Tool[] = [
 
   {
     name: 'list_jobs',
-    description: "Job applications and recent listings. status filters applications; recent_days=N filters listings by fetched date.",
-    args_schema: '{"status?":"applied|screening|interview|offer|rejected|ghosted", "recent_days?":7}',
+    description: "The user's job tracker: applications (with stage, follow-up date, interview time, days since last activity) and saved jobs. status filters applications.",
+    args_schema: '{"status?":"applied|screening|interview|offer|rejected|ghosted"}',
     run: async (sb, userId, args) => {
-      const apps = await (async () => {
-        let q = sb.from('job_applications').select('id,company,role,status,applied_date,job_url,follow_up_date').eq('user_id', userId);
-        if (args.status) q = q.eq('status', String(args.status));
-        const { data } = await q.order('applied_date', { ascending: false }).limit(50);
-        return data ?? [];
-      })();
-      const days = Number(args.recent_days ?? 0);
-      const listings = await (async () => {
-        let q = sb.from('job_listings').select('id,title,company,location,job_url,fetched_at,is_new').eq('user_id', userId);
-        if (days > 0) q = q.gte('fetched_at', new Date(Date.now() - days * 86400000).toISOString());
-        const { data } = await q.order('fetched_at', { ascending: false }).limit(20);
-        return data ?? [];
-      })();
-      return { applications: apps, recent_listings: listings };
+      let q = sb.from('job_applications')
+        .select('id,company,role,status,applied_date,job_url,follow_up_date,interview_at,last_activity_at,public_slug')
+        .eq('user_id', userId);
+      if (args.status) q = q.eq('status', String(args.status));
+      const { data: apps } = await q.order('applied_date', { ascending: false }).limit(50);
+      const { data: saved } = await sb.from('job_listings')
+        .select('title,company,location,job_url,public_slug')
+        .eq('user_id', userId).eq('is_saved', true).order('fetched_at', { ascending: false }).limit(20);
+      const now = Date.now();
+      return {
+        applications: (apps ?? []).map((a) => ({
+          ...a,
+          days_since_activity: a.last_activity_at ? Math.floor((now - Date.parse(a.last_activity_at)) / 86400000) : null,
+        })),
+        saved_jobs: saved ?? [],
+      };
+    },
+  },
+
+  {
+    name: 'search_jobs',
+    description: "Search live job postings (India by default). Returns title, company, location, work mode, salary, posted date, apply link and a 0-100 match score against the user's profile. Use for 'find me ... jobs'.",
+    args_schema: '{"q?":"react developer","work_mode?":["remote"],"seniority?":["senior"],"skills?":["react"],"countries?":["in"],"posted_within_days?":7,"limit?":5}',
+    run: async (sb, userId, args) => {
+      const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' && v ? v.split(',').map((x) => x.trim()) : undefined);
+      const { data: prof } = await sb.from('job_profile').select('skills,experience_years,work_modes,countries,salary_min,salary_currency,resume_text').eq('user_id', userId).maybeSingle();
+      const res = await searchJobs(sanitizeFilters({
+        q: args.q, work_mode: list(args.work_mode), seniority: list(args.seniority), skills: list(args.skills),
+        countries: list(args.countries) ?? prof?.countries ?? ['in'], posted_within_days: args.posted_within_days,
+        fresh_only: true, sort: args.q ? undefined : 'newest',
+      }), { limit: Math.min(Number(args.limit) || 5, 8) });
+      return {
+        total_matching: res.total,
+        jobs: res.jobs.map((j) => ({
+          slug: j.public_slug, title: j.title, company: j.company, location: j.location, work_mode: j.work_mode,
+          salary: formatSalary(j.enrichment), posted_at: j.posted_at, apply_url: j.url,
+          match: prof ? matchJob(j, prof).score : null,
+        })),
+      };
+    },
+  },
+
+  {
+    name: 'get_job',
+    description: "Details of one job posting by slug (from search_jobs): summary, requirements, skills, salary, and how well it matches the user's profile.",
+    args_schema: '{"slug":"..."}',
+    run: async (sb, userId, args) => {
+      const j = await getJob(String(args.slug ?? ''));
+      const { data: prof } = await sb.from('job_profile').select('skills,experience_years,work_modes,countries,salary_min,salary_currency,resume_text').eq('user_id', userId).maybeSingle();
+      const m = prof ? matchJob(j, prof) : null;
+      return {
+        title: j.title, company: j.company, location: j.location, work_mode: j.work_mode, salary: formatSalary(j.enrichment),
+        summary: j.enrichment.summary, experience_years_min: j.enrichment.experience_years_min, skills: j.skills,
+        requirements: (j.enrichment.requirements ?? []).slice(0, 8), apply_url: j.url,
+        match: m ? { score: m.score, matched: m.matched, missing: m.missing.slice(0, 10) } : null,
+      };
     },
   },
 

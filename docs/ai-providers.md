@@ -16,9 +16,9 @@ advances to the next. Auth or programming errors bubble immediately.
 
 | Position | Provider | Why |
 | --- | --- | --- |
-| 1 | **Groq Cloud** | Free, ~14,400 req/day per model, no monthly cap, ~10× faster than Gemini. OpenAI-compatible. Runs `llama-3.3-70b-versatile` (primary) and `llama-3.1-8b-instant` (fast). |
+| 1 | **Groq Cloud** | Free with generous daily limits (but a small per-minute token cap, e.g. 8k TPM on `gpt-oss-20b`), ~10× faster than Gemini. OpenAI-compatible. Runs `openai/gpt-oss-120b` (primary) and `openai/gpt-oss-20b` (fast). Groq retired the Llama 3.x ids, so check `GET https://api.groq.com/openai/v1/models` if you see `model_not_found`. |
 | 2 | **Self-hosted Ollama** | Truly unlimited; runs on your box via Cloudflare tunnel. CPU inference with `llama3.1:8b` (~8 GB RAM). |
-| opt-in | **Gemini** | Original; kept for A/B (`AI_PROVIDER=gemini`). Free tier has a hard monthly cap and a SAFETY filter that occasionally blocks benign topics like "OpenBMC" — that's why it's no longer the default. |
+| opt-in | **Gemini** | Original; kept for A/B (`AI_PROVIDER=gemini`). Free tier is only ~20 requests/day per model (it is still the only provider that can read PDFs and photos) and has a SAFETY filter that occasionally blocks benign topics like "OpenBMC" — that's why it's no longer the default. |
 
 ## Setup
 
@@ -26,7 +26,7 @@ advances to the next. Auth or programming errors bubble immediately.
 
 1. Create a free key at https://console.groq.com/keys
 2. `supabase secrets set GROQ_API_KEY=<key>`
-3. (optional) `supabase secrets set GROQ_MODEL_PRIMARY=llama-3.3-70b-versatile GROQ_MODEL_FAST=llama-3.1-8b-instant`
+3. (optional) `supabase secrets set GROQ_MODEL_PRIMARY=openai/gpt-oss-120b GROQ_MODEL_FAST=openai/gpt-oss-20b`
 
 ### 2. Ollama fallback (optional but recommended)
 

@@ -148,7 +148,7 @@ export function SettingsPage() {
 
   async function exportData() {
     if (!userId) return;
-    const tables = ['profiles', 'learning_topics', 'learning_plans', 'learning_streaks', 'job_settings', 'job_listings', 'job_applications', 'resumes', 'task_categories', 'tasks', 'loans', 'emi_payments', 'reminder_settings'] as const;
+    const tables = ['profiles', 'learning_topics', 'learning_plans', 'learning_streaks', 'job_settings', 'job_profile', 'job_listings', 'job_applications', 'job_application_events', 'job_saved_searches', 'resumes', 'task_categories', 'tasks', 'loans', 'emi_payments', 'reminder_settings'] as const;
     const out: Record<string, unknown> = { exported_at: new Date().toISOString() };
     for (const t of tables) {
       const { data } = await supabase.from(t).select('*');
@@ -319,7 +319,7 @@ export function SettingsPage() {
         <CardContent className="space-y-2">
           {[
             { k: 'GEMINI_API_KEY', label: 'Google Gemini' },
-            { k: 'RAPIDAPI_JSEARCH_KEY', label: 'RapidAPI JSearch' },
+            { k: 'GROQ_API_KEY', label: 'Groq' },
             { k: 'RESEND_API_KEY', label: 'Resend (email fallback)' },
             { k: 'MAIL_BRIDGE_URL', label: 'Mail bridge URL' },
             { k: 'NTFY_TOPIC', label: 'ntfy.sh topic' },

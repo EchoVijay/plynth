@@ -8,6 +8,7 @@ import { sendMail } from '../_shared/mail.ts';
 import { pushNtfy } from '../_shared/ntfy.ts';
 import { sendTelegram } from '../_shared/telegram.ts';
 import { renderDigestEmail, type MailSection } from '../_shared/mail-template.ts';
+import { isFollowUpDue, isQuiet, quietDays } from '../_shared/pure/job-tracker.ts';
 
 const GRACE_MIN = 30; // fire if scheduled time is within the last 30 min AND hasn't fired today (dedup ensures single fire)
 
@@ -69,17 +70,33 @@ async function buildDigest(sb: ReturnType<typeof admin>, userId: string, categor
     }
   }
   if (category === 'all' || category === 'jobs') {
-    const { data } = await sb.from('job_listings').select('title,company,job_url').eq('user_id', userId).eq('is_new', true).limit(10);
-    if ((data ?? []).length) {
+    const { data } = await sb.from('job_applications')
+      .select('company,role,status,applied_date,follow_up_date,last_activity_at,job_url').eq('user_id', userId).limit(300);
+    const now = new Date();
+    const apps = data ?? [];
+    const due = apps.filter((a) => isFollowUpDue(a, now)).slice(0, 8);
+    if (due.length) {
       sections.push({
-        title: 'New jobs',
-        emoji: '💼',
-        items: data!.map((j) => ({
-          html: `<a href="${j.job_url}" style="color:#6366f1;text-decoration:none"><b>${escapeHtml(j.title)}</b></a>`,
-          meta: j.company,
+        title: 'Follow-ups due',
+        emoji: '⏰',
+        items: due.map((a) => ({
+          html: `<b>${escapeHtml(a.role)}</b> &mdash; ${escapeHtml(a.company)}`,
+          meta: `Follow up planned for ${a.follow_up_date}`,
         })),
       });
-      for (const j of data!) flatLines.push(`• ${j.title} @ ${j.company}`);
+      for (const a of due) flatLines.push(`• Follow up: ${a.role} @ ${a.company}`);
+    }
+    const quiet = apps.filter((a) => isQuiet(a, now)).slice(0, 8);
+    if (quiet.length) {
+      sections.push({
+        title: 'Applications gone quiet',
+        emoji: '🤫',
+        items: quiet.map((a) => ({
+          html: `<b>${escapeHtml(a.role)}</b> &mdash; ${escapeHtml(a.company)}`,
+          meta: `No news for ${quietDays(a, now)} days — consider a follow-up`,
+        })),
+      });
+      for (const a of quiet) flatLines.push(`• Quiet ${quietDays(a, now)}d: ${a.role} @ ${a.company}`);
     }
   }
 

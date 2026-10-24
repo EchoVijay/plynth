@@ -13,7 +13,8 @@ export async function pushNtfy(opts: {
   const topic = opts.topic ?? (await getSecret('NTFY_TOPIC'));
   if (!topic) return false;
   const headers: Record<string, string> = {
-    Title: opts.title,
+    // HTTP header values must be Latin-1; emoji would make fetch throw, so keep them out of the title (tags carry the icon).
+    Title: opts.title.replace(/[^\x20-\xFF]/g, '').replace(/\s+/g, ' ').trim() || 'Plynth',
     Priority: opts.priority ?? 'default',
   };
   if (opts.tags?.length) headers.Tags = opts.tags.join(',');

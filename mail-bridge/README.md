@@ -75,7 +75,6 @@ supabase secrets set RESEND_FROM='Plynth <onboarding@resend.dev>'
 supabase secrets set MAIL_DEFAULT_TO=vijay.devops.bot@gmail.com
 supabase secrets set NTFY_TOPIC=vijay-devbot-7k9x
 supabase secrets set GEMINI_API_KEY=<gemini key>
-supabase secrets set RAPIDAPI_JSEARCH_KEY=<rapidapi key>
 ```
 
 ## Verifying non-disruption

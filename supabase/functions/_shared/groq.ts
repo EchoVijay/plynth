@@ -1,12 +1,13 @@
 // _shared/groq.ts — Groq Cloud (OpenAI-compatible) provider.
-// Free tier: ~14,400 req/day per model, no monthly cap, ~10x faster than Gemini.
+// Free tier: generous per-day request limits, ~10x faster than Gemini.
 // Docs: https://console.groq.com/docs
 
 import { getSecret } from './util.ts';
 
 const PER_CALL_TIMEOUT_MS = 12_000;
-const DEFAULT_PRIMARY = 'llama-3.3-70b-versatile';
-const DEFAULT_FAST = 'llama-3.1-8b-instant';
+// Groq retired the Llama 3.x ids; override with GROQ_MODEL_PRIMARY / GROQ_MODEL_FAST if they change again.
+const DEFAULT_PRIMARY = 'openai/gpt-oss-120b';
+const DEFAULT_FAST = 'openai/gpt-oss-20b';
 
 export class RateLimitError extends Error {
   constructor(provider: string, detail: string) {
@@ -43,6 +44,7 @@ async function chat(model: string, messages: unknown[], asJson: boolean): Promis
     temperature: 0.7,
   };
   if (asJson) body.response_format = { type: 'json_object' };
+  if (model.startsWith('openai/gpt-oss')) body.reasoning_effort = 'low';
 
   const r = await callGroq(model, key, body);
   if (r.status === 429) {
@@ -148,6 +150,8 @@ export async function groqChatJSON(messages: ChatMsg[], opts?: { model?: string;
   const key = await getSecret('GROQ_API_KEY');
   if (!key) throw new Error('GROQ_API_KEY not configured');
   const model = opts?.model || (await getSecret('GROQ_MODEL_FAST')) || DEFAULT_FAST;
+  // Reasoning models (gpt-oss) spend tokens thinking, so a tiny max_tokens would truncate the answer.
+  const reasoning = model.startsWith('openai/gpt-oss');
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), opts?.timeoutMs ?? CHAT_TIMEOUT_MS);
   try {
@@ -158,19 +162,39 @@ export async function groqChatJSON(messages: ChatMsg[], opts?: { model?: string;
         model,
         messages,
         temperature: 0.1,
-        max_tokens: 96,
+        max_tokens: reasoning ? 512 : 96,
+        ...(reasoning ? { reasoning_effort: 'low' } : {}),
         response_format: { type: 'json_object' },
       }),
       signal: ctl.signal,
     });
     if (!r.ok) {
-      const detail = (await r.text()).slice(0, 400);
-      throw new Error(`Groq chat ${r.status}: ${detail}`);
+      const detail = (await r.text()).slice(0, 1200);
+      // gpt-oss sometimes answers a tool-routing prompt with a native tool call or plain prose, which Groq rejects.
+      // Recover the intended decision (see recoverToolCall) instead of failing the whole chat turn.
+      const recovered = recoverToolCall(detail);
+      if (recovered) return recovered;
+      throw new Error(`Groq chat ${r.status}: ${detail.slice(0, 400)}`);
     }
     const data = await r.json();
     return data?.choices?.[0]?.message?.content ?? '';
   } finally {
     clearTimeout(t);
+  }
+}
+
+function recoverToolCall(errorBody: string): string | null {
+  try {
+    const err = JSON.parse(errorBody)?.error;
+    // A prose answer instead of JSON means the model has nothing more to look up.
+    if (err?.code === 'json_validate_failed') return JSON.stringify({ action: 'final' });
+    if (err?.code !== 'tool_use_failed' || typeof err.failed_generation !== 'string') return null;
+    const call = JSON.parse(err.failed_generation);
+    if (typeof call?.name !== 'string') return null;
+    const args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : (call.arguments ?? {});
+    return JSON.stringify({ action: 'tool', tool: call.name, args });
+  } catch {
+    return null;
   }
 }
 

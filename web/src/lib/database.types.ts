@@ -37,7 +37,7 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['job_listings']['Row']>;
       };
       job_applications: {
-        Row: { id: string; user_id: string; company: string; role: string; job_url: string | null; resume_used: string | null; applied_date: string; status: 'applied' | 'screening' | 'interview' | 'offer' | 'rejected' | 'ghosted'; notes: string | null; follow_up_date: string | null; salary_offered: number | null; updated_at: string };
+        Row: { id: string; user_id: string; company: string; role: string; job_url: string | null; resume_used: string | null; applied_date: string; status: 'applied' | 'screening' | 'interview' | 'offer' | 'rejected' | 'ghosted'; notes: string | null; follow_up_date: string | null; salary_offered: number | null; updated_at: string; listing_id: string | null; public_slug: string | null; last_activity_at: string; interview_at: string | null; calendar_event_id: string | null };
         Insert: Partial<Database['public']['Tables']['job_applications']['Row']> & { user_id: string; company: string; role: string };
         Update: Partial<Database['public']['Tables']['job_applications']['Row']>;
       };
