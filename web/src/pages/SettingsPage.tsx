@@ -276,7 +276,7 @@ function TelegramCard({ userId, chatId, onLinked }: { userId: string; chatId?: n
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              1. Open <a href="https://t.me/PlynthBot" target="_blank" rel="noreferrer" className="underline text-primary">@PlynthBot</a> in Telegram<br />
+              1. Open <a href="https://t.me/plynth_vijay_bot" target="_blank" rel="noreferrer" className="underline text-primary">@plynth_vijay_bot</a> in Telegram<br />
               2. Generate a link code below<br />
               3. Send <code>/link CODE</code> to the bot
             </p>

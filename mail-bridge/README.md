@@ -86,6 +86,10 @@ ls -lh /home/vijay/plynth/mail-bridge/state/email_queue.jsonl
 # This is the bridge's separate queue.
 ```
 
+> **The bridge is now a fallback only.** Primary mail delivery is Gmail SMTP straight from Supabase
+> (`GMAIL_USER` / `GMAIL_APP_PASSWORD` secrets, see `docs/deploy.md`), so mail works with the laptop off.
+> The bridge is still used for ntfy push relay (ntfy.sh throttles Supabase IPs) and as a last-resort mail path.
+
 ## Always-on tunnel (systemd)
 
 Supabase edge functions reach the bridge through a Cloudflare quick tunnel. The URL changes on every

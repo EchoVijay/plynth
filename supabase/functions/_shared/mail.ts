@@ -1,11 +1,13 @@
-// _shared/mail.ts — sends mail through the Plynth mail bridge (Gmail via a Cloudflare tunnel),
-// falls back to Resend, and records exactly one email_log row per message.
+// _shared/mail.ts — sends mail and records exactly one email_log row per message.
 //
-// Why both: Resend's default sender (onboarding@resend.dev) only delivers to the Resend account
-// owner until a domain is verified, so the bridge is what reaches every other address.
+// Transports, in order:
+//   1. Gmail SMTP (smtp.gmail.com:465, app password) — runs entirely in the cloud, free, reaches any address.
+//   2. Resend — its default sender only delivers to the account owner until a domain is verified.
+//   3. Home mail bridge (Cloudflare tunnel) — last resort, needs the host machine online.
 
 import { admin, getSecret } from './util.ts';
 import { bridgeConfig } from './bridge.ts';
+import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts';
 
 export interface SendMailInput {
   to?: string;             // optional override; default = MAIL_DEFAULT_TO
@@ -20,6 +22,34 @@ export interface SendMailResult { ok: boolean; channel: string; error?: string }
 
 const BRIDGE_TIMEOUT_MS = 20_000;
 const RESEND_TIMEOUT_MS = 15_000;
+const GMAIL_TIMEOUT_MS = 25_000;
+
+async function viaGmail(to: string, input: SendMailInput): Promise<SendMailResult> {
+  const user = await getSecret('GMAIL_USER');
+  const pass = await getSecret('GMAIL_APP_PASSWORD');
+  if (!user || !pass) return { ok: false, channel: 'gmail', error: 'gmail smtp not configured' };
+  const name = (await getSecret('MAIL_FROM_NAME')) ?? 'Plynth';
+  const client = new SMTPClient({
+    connection: { hostname: 'smtp.gmail.com', port: 465, tls: true, auth: { username: user, password: pass } },
+  });
+  try {
+    await Promise.race([
+      client.send({
+        from: `${name} <${user}>`, to,
+        subject: input.subject,
+        content: input.text ?? 'This message needs an HTML-capable mail client.',
+        html: input.html,
+      }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), GMAIL_TIMEOUT_MS)),
+    ]);
+    return { ok: true, channel: 'gmail' };
+  } catch (e) {
+    return { ok: false, channel: 'gmail', error: `gmail smtp: ${(e as Error).message}` };
+  } finally {
+    try { await client.close(); } catch { /* already closed */ }
+  }
+}
+
 async function viaBridge(to: string, input: SendMailInput): Promise<SendMailResult> {
   const cfg = await bridgeConfig();
   if (!cfg) return { ok: false, channel: 'bridge', error: 'mail bridge not configured' };
@@ -70,14 +100,14 @@ async function viaResend(to: string, input: SendMailInput): Promise<SendMailResu
 export async function sendMail(input: SendMailInput): Promise<SendMailResult> {
   const to = input.to ?? (await getSecret('MAIL_DEFAULT_TO')) ?? 'vijay.devops.bot@gmail.com';
 
-  const bridge = await viaBridge(to, input);
-  let result = bridge;
-  if (!bridge.ok) {
-    const resend = await viaResend(to, input);
-    result = resend.ok
-      ? resend
-      : { ok: false, channel: 'none', error: [bridge.error, resend.error].filter(Boolean).join(' | ') };
+  const errors: string[] = [];
+  let result: SendMailResult | null = null;
+  for (const transport of [viaGmail, viaResend, viaBridge]) {
+    const r = await transport(to, input);
+    if (r.ok) { result = r; break; }
+    if (r.error) errors.push(r.error);
   }
+  if (!result) result = { ok: false, channel: 'none', error: errors.join(' | ') };
 
   try {
     await admin().from('email_log').insert({

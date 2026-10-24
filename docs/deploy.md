@@ -55,6 +55,17 @@ cloudflared tunnel --url http://127.0.0.1:5556
 # Copy the printed URL → supabase secrets set MAIL_BRIDGE_URL=...
 ```
 
+### Mail (no laptop needed)
+
+Mail is sent straight from Supabase over Gmail SMTP (`smtp.gmail.com:465`, free, ~500 messages/day, any recipient):
+
+```bash
+supabase secrets set GMAIL_USER=<sender@gmail.com> GMAIL_APP_PASSWORD=<16-char app password>
+```
+
+Create the app password at https://myaccount.google.com/apppasswords (2-step verification must be on). Order of
+transports: Gmail SMTP → Resend → home mail bridge. The bridge is now only a last-resort fallback.
+
 ### Scheduled jobs (reminders, calendar alerts, job digests)
 
 pg_cron calls edge functions through `invoke_edge()`, which reads two Vault secrets. Without them every

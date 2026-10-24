@@ -88,6 +88,9 @@ def health():
     })
 
 
+_send_lock = threading.Lock()
+
+
 @app.route("/api/mail/send", methods=["POST"])
 def send_mail():
     if not _check_auth():
@@ -104,12 +107,14 @@ def send_mail():
 
     # The existing Mailer.send() sends to NOTIFY_EMAIL by default. Override
     # the recipient just for this call by temporarily swapping the config.
-    original_to = _cfg.get("NOTIFY_EMAIL")
-    try:
-        _cfg["NOTIFY_EMAIL"] = to
-        ok = mailer.send(subject=subject, body=body, body_type=body_type, urgent=urgent)
-    finally:
-        _cfg["NOTIFY_EMAIL"] = original_to
+    # Mailer copies NOTIFY_EMAIL into self.notify_email at construction, so that attribute is the one to swap.
+    with _send_lock:
+        original_to = mailer.notify_email
+        try:
+            mailer.notify_email = to
+            ok = mailer.send(subject=subject, body=body, body_type=body_type, urgent=urgent)
+        finally:
+            mailer.notify_email = original_to
     return jsonify({
         "success": bool(ok),
         "using_backup": getattr(mailer, "using_backup", False),
