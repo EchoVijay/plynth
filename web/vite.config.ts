@@ -15,6 +15,12 @@ export default defineConfig({
       includeAssets: ['favicon.ico', 'favicon-32.png', 'favicon-16.png', 'apple-touch-icon.png', 'logo.png', 'logo-128.png', 'robots.txt'],
       workbox: {
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        globIgnores: ['**/mediapipe/**'],
+        runtimeCaching: [{
+          urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith('/mediapipe/'),
+          handler: 'CacheFirst',
+          options: { cacheName: 'focus-monitor-models', expiration: { maxEntries: 8 }, cacheableResponse: { statuses: [200] } },
+        }],
       },
       manifest: {
         name: 'Plynth',

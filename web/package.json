@@ -47,6 +47,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
     "dompurify": "^3.2.6",
+    "@mediapipe/tasks-vision": "0.10.21",
     "framer-motion": "^11.5.4",
     "lucide-react": "^0.445.0",
     "react": "^19.0.0",
