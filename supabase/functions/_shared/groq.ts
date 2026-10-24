@@ -228,6 +228,7 @@ export async function* groqChatStream(
         messages,
         temperature: 0.4,
         max_tokens: 1536,
+        ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' } : {}),
         stream: true,
       }),
       signal: ctl.signal,
@@ -265,5 +266,42 @@ export async function* groqChatStream(
     }
   } finally {
     clearTimeout(t);
+  }
+}
+
+// ---- Resilient variants: if one model is rate-limited (free-tier TPM caps are small) or erroring, try the other ----
+
+async function otherModel(used: string): Promise<string> {
+  const primary = (await getSecret('GROQ_MODEL_PRIMARY')) || DEFAULT_PRIMARY;
+  const fast = (await getSecret('GROQ_MODEL_FAST')) || DEFAULT_FAST;
+  return used === primary ? fast : primary;
+}
+
+export async function groqChatJSONResilient(messages: ChatMsg[], opts?: { timeoutMs?: number }): Promise<string> {
+  const first = (await getSecret('GROQ_MODEL_FAST')) || DEFAULT_FAST;
+  try {
+    return await groqChatJSON(messages, { ...opts, model: first });
+  } catch (e) {
+    const second = await otherModel(first);
+    if (second === first) throw e;
+    console.warn('[groq] decision turn failed on', first, '- retrying on', second, (e as Error).message.slice(0, 120));
+    return await groqChatJSON(messages, { ...opts, model: second });
+  }
+}
+
+export async function* groqChatStreamResilient(
+  messages: ChatMsg[],
+  opts?: { timeoutMs?: number; signal?: AbortSignal; rateLimit?: GroqRateLimit },
+): AsyncGenerator<string, void, unknown> {
+  const first = (await getSecret('GROQ_MODEL_PRIMARY')) || DEFAULT_PRIMARY;
+  let yielded = false;
+  try {
+    for await (const d of groqChatStream(messages, { ...opts, model: first })) { yielded = true; yield d; }
+  } catch (e) {
+    // Only retry when nothing has reached the user yet.
+    const second = await otherModel(first);
+    if (yielded || second === first || opts?.signal?.aborted) throw e;
+    console.warn('[groq] stream failed on', first, '- retrying on', second, (e as Error).message.slice(0, 120));
+    for await (const d of groqChatStream(messages, { ...opts, model: second })) yield d;
   }
 }

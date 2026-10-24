@@ -1,0 +1,17 @@
+[Unit]
+Description=Plynth Mail Bridge Cloudflare Quick Tunnel + publish URL to Supabase
+After=network-online.target plynth-mail-bridge.service
+Wants=network-online.target
+Requires=plynth-mail-bridge.service
+
+[Service]
+Type=exec
+User=vijay
+Group=vijay
+EnvironmentFile=/home/vijay/.config/plynth-mail-tunnel.env
+ExecStart=/home/vijay/plynth/mail-bridge/tunnel-publish.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

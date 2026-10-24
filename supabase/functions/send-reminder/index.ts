@@ -1,283 +1,235 @@
 // send-reminder: dispatcher run every 5 minutes by pg_cron.
-// For each enabled reminder_settings row, expand `times_of_day[]` and fire
-// any time that falls inside the current 5-minute window. Per-fire dedup
-// uses public.reminder_log. Manual test via POST {test_reminder_id: uuid}.
+// For each enabled reminder_settings row it works out, in the USER's timezone, which of its times
+// of day are due, builds the digest and delivers it over the chosen channels. reminder_log records
+// what really happened per channel; a fire is only considered done once something was delivered,
+// otherwise it is retried on the next runs (up to MAX_ATTEMPTS) within the grace window.
+//
+// Manual test: POST {test_reminder_id} with the owner's JWT (or the service key).
 
-import { admin, json, corsHeaders, getSecret } from '../_shared/util.ts';
-import { sendMail } from '../_shared/mail.ts';
-import { pushNtfy } from '../_shared/ntfy.ts';
-import { sendTelegram } from '../_shared/telegram.ts';
+import { admin, json, corsHeaders, getSecret, userFromAuth } from '../_shared/util.ts';
 import { renderDigestEmail, type MailSection } from '../_shared/mail-template.ts';
-import { isFollowUpDue, isQuiet, quietDays } from '../_shared/pure/job-tracker.ts';
+import { notifyUser, parseChannels, type Channel, type Recipient } from '../_shared/notify.ts';
+import { loadOverview, type Overview } from '../_shared/overview.ts';
+import { dueFires, GRACE_MIN } from '../_shared/pure/reminder-rules.ts';
+import { formatClock, greetingFor, localParts } from '../_shared/pure/tz.ts';
+import { escapeTelegram } from '../_shared/pure/job-digest.ts';
 
-const GRACE_MIN = 30; // fire if scheduled time is within the last 30 min AND hasn't fired today (dedup ensures single fire)
+const MAX_ATTEMPTS = 3;
+const DEFAULT_APP_URL = 'https://plynth-finance.netlify.app';
 
-interface DigestData {
-  sections: MailSection[];
-  flatLines: string[];
-}
+interface Item { html: string; meta?: string; line: string }
+interface Section { title: string; emoji: string; items: Item[] }
 
-async function buildDigest(sb: ReturnType<typeof admin>, userId: string, category: string): Promise<DigestData> {
-  const today = new Date().toISOString().slice(0, 10);
-  const sections: MailSection[] = [];
-  const flatLines: string[] = [];
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
-  if (category === 'all' || category === 'tasks') {
-    const { data } = await sb.from('tasks').select('title,due_date,priority,status').eq('user_id', userId)
-      .or(`due_date.eq.${today},and(due_date.lt.${today},status.neq.completed)`).neq('status', 'completed');
-    if ((data ?? []).length) {
-      sections.push({
-        title: 'Tasks',
-        emoji: '✅',
-        items: data!.map((t) => ({
-          html: `<b>${escapeHtml(t.title)}</b>`,
-          meta: `${t.due_date ?? 'no date'} · ${t.priority}`,
+const CATEGORY_LABEL: Record<string, string> = {
+  all: 'Daily digest', calendar: 'Schedule', tasks: 'Tasks', learning: 'Learning', finance: 'Finance', jobs: 'Jobs',
+};
+
+function buildSections(ov: Overview, category: string): Section[] {
+  const want = (c: string) => category === 'all' || category === c;
+  const out: Section[] = [];
+  const today = ov.from;
+
+  if (want('calendar') && ov.events.length) {
+    out.push({
+      title: "Today's schedule", emoji: '📅',
+      items: ov.events.map((e) => {
+        const when = e.all_day ? 'All day' : `${formatClock(e.time)}${e.end_time ? ` – ${formatClock(e.end_time)}` : ''}`;
+        return {
+          html: `<b>${esc(e.title)}</b>`,
+          meta: [when, e.location].filter(Boolean).join(' · '),
+          line: `• ${when}: ${e.title}${e.location ? ` @ ${e.location}` : ''}`,
+        };
+      }),
+    });
+  }
+  if (want('tasks') && ov.tasks.length) {
+    out.push({
+      title: 'Tasks', emoji: '✅',
+      items: ov.tasks.map((t) => ({
+        html: `<b>${esc(t.title)}</b>`,
+        meta: `${t.overdue ? `Overdue (${t.due_date})` : t.due_time ? `Today ${formatClock(t.due_time)}` : 'Today'} · ${t.priority}`,
+        line: `• ${t.title}${t.overdue ? ' (overdue)' : ''} — ${t.priority}`,
+      })),
+    });
+  }
+  if (want('learning') && ov.learning.length) {
+    out.push({
+      title: 'Learning today', emoji: '📚',
+      items: ov.learning.map((p) => ({
+        html: `<b>${esc(p.title)}</b>`,
+        meta: `${p.topic ?? ''} · ${p.minutes} min`,
+        line: `• ${p.title} (${p.minutes}m)`,
+      })),
+    });
+  }
+  if (want('finance')) {
+    const emis = ov.emis;
+    if (emis.length) {
+      out.push({
+        title: 'EMIs due soon', emoji: '💰',
+        items: emis.map((l) => ({
+          html: `<b>${esc(l.name)}</b> &mdash; ${inr(l.amount)}`,
+          meta: l.date === today ? 'Due today' : `Due ${l.date}`,
+          line: `• ${l.name} ${inr(l.amount)} (${l.date === today ? 'today' : l.date})`,
         })),
       });
-      for (const t of data!) flatLines.push(`• ${t.title} (${t.priority})`);
     }
-  }
-  if (category === 'all' || category === 'learning') {
-    const { data } = await sb.from('learning_plans')
-      .select('title,estimated_minutes,status,learning_topics(topic_name)').eq('user_id', userId)
-      .eq('date', today).neq('status', 'completed').order('order_in_day');
-    if ((data ?? []).length) {
-      sections.push({
-        title: 'Learning today',
-        emoji: '📚',
-        items: data!.map((p: any) => ({
-          html: `<b>${escapeHtml(p.title)}</b>`,
-          meta: `${p.learning_topics?.topic_name ?? ''} · ${p.estimated_minutes} min`,
+    if (ov.subscriptions.length) {
+      out.push({
+        title: 'Subscriptions renewing', emoji: '🔁',
+        items: ov.subscriptions.map((s) => ({
+          html: `<b>${esc(s.name)}</b> &mdash; ${inr(s.amount)}`,
+          meta: s.date === today ? 'Renews today' : `Renews ${s.date}`,
+          line: `• ${s.name} ${inr(s.amount)} (${s.date})`,
         })),
       });
-      for (const p of data!) flatLines.push(`• ${p.title} (${p.estimated_minutes}m)`);
     }
   }
-  if (category === 'all' || category === 'finance') {
-    const { data } = await sb.from('loans').select('name,emi_amount,emi_due_day,status').eq('user_id', userId).eq('status', 'active');
-    const day = new Date().getDate();
-    const due = (data ?? []).filter((l) => Math.abs(l.emi_due_day - day) <= 3);
-    if (due.length) {
-      sections.push({
-        title: 'EMIs due soon',
-        emoji: '💰',
-        items: due.map((l) => ({
-          html: `<b>${escapeHtml(l.name)}</b> &mdash; ₹${l.emi_amount}`,
-          meta: `Due day ${l.emi_due_day} of the month`,
-        })),
-      });
-      for (const l of due) flatLines.push(`• ${l.name} ₹${l.emi_amount} (day ${l.emi_due_day})`);
-    }
-  }
-  if (category === 'all' || category === 'jobs') {
-    const { data } = await sb.from('job_applications')
-      .select('company,role,status,applied_date,follow_up_date,last_activity_at,job_url').eq('user_id', userId).limit(300);
-    const now = new Date();
-    const apps = data ?? [];
-    const due = apps.filter((a) => isFollowUpDue(a, now)).slice(0, 8);
-    if (due.length) {
-      sections.push({
-        title: 'Follow-ups due',
-        emoji: '⏰',
-        items: due.map((a) => ({
-          html: `<b>${escapeHtml(a.role)}</b> &mdash; ${escapeHtml(a.company)}`,
+  if (want('jobs')) {
+    if (ov.jobs.followUps.length) {
+      out.push({
+        title: 'Follow-ups due', emoji: '⏰',
+        items: ov.jobs.followUps.map((a) => ({
+          html: `<b>${esc(a.role)}</b> &mdash; ${esc(a.company)}`,
           meta: `Follow up planned for ${a.follow_up_date}`,
+          line: `• Follow up: ${a.role} @ ${a.company}`,
         })),
       });
-      for (const a of due) flatLines.push(`• Follow up: ${a.role} @ ${a.company}`);
     }
-    const quiet = apps.filter((a) => isQuiet(a, now)).slice(0, 8);
-    if (quiet.length) {
-      sections.push({
-        title: 'Applications gone quiet',
-        emoji: '🤫',
-        items: quiet.map((a) => ({
-          html: `<b>${escapeHtml(a.role)}</b> &mdash; ${escapeHtml(a.company)}`,
-          meta: `No news for ${quietDays(a, now)} days — consider a follow-up`,
+    if (ov.jobs.quiet.length) {
+      out.push({
+        title: 'Applications gone quiet', emoji: '🤫',
+        items: ov.jobs.quiet.map((a) => ({
+          html: `<b>${esc(a.role)}</b> &mdash; ${esc(a.company)}`,
+          meta: `No news for ${a.days} days — consider a follow-up`,
+          line: `• Quiet ${a.days}d: ${a.role} @ ${a.company}`,
         })),
       });
-      for (const a of quiet) flatLines.push(`• Quiet ${quietDays(a, now)}d: ${a.role} @ ${a.company}`);
     }
   }
-
-  return { sections, flatLines };
+  return out;
 }
 
 interface ReminderRow {
   id: string;
   user_id: string;
   category: string;
-  channel: 'email' | 'ntfy' | 'telegram' | 'both' | 'all';
+  channel: string;
+  channels?: string[] | null;
   time_of_day: string;
-  times_of_day: string[];
+  times_of_day: string[] | null;
   days_of_week: number[];
   enabled: boolean;
-  profiles?: { email?: string; full_name?: string; timezone?: string; ntfy_topic?: string; telegram_chat_id?: number };
 }
 
+type Profile = Recipient & { timezone?: string | null };
+
 async function dispatchOne(
-  sb: ReturnType<typeof admin>,
-  r: ReminderRow,
-  fireFor: string,
-  fireTime: string,
-  appUrl: string,
-): Promise<{ ok: boolean; channel: string }> {
-  const digest = await buildDigest(sb, r.user_id, r.category);
-  const greeting = greetingFor();
-  const subject = `Plynth · ${prettyCategory(r.category)} · ${fireTime.slice(0, 5)}`;
+  sb: ReturnType<typeof admin>, r: ReminderRow, p: Profile, fireDate: string, fireTime: string,
+  appUrl: string, opts: { record: boolean; attemptsBefore: number },
+) {
+  const tz = p.timezone || 'Asia/Kolkata';
+  const now = new Date();
+  const ov = await loadOverview(sb, r.user_id, { tz, now, soonDays: 3 });
+  const sections = buildSections(ov, r.category);
+  const label = CATEGORY_LABEL[r.category] ?? r.category;
+  const nowLocal = localParts(tz, now);
+  const first = (p.full_name ?? '').split(' ')[0];
+
+  const subject = `Plynth · ${label} · ${fireTime.slice(0, 5)}`;
   const html = renderDigestEmail({
-    greeting: `${greeting}${r.profiles?.full_name ? ', ' + r.profiles.full_name.split(' ')[0] : ''} 👋`,
-    intro: digest.sections.length
-      ? `Here's your ${prettyCategory(r.category).toLowerCase()} digest for today.`
-      : `No ${prettyCategory(r.category).toLowerCase()} items right now — you're all clear.`,
-    sections: digest.sections,
+    greeting: `${greetingFor(nowLocal.minutes)}${first ? ', ' + first : ''} 👋`,
+    intro: sections.length ? `Here's your ${label.toLowerCase()} for today.` : `Nothing on your ${label.toLowerCase()} list right now — you're all clear.`,
+    sections: sections.map((s): MailSection => ({ title: s.title, emoji: s.emoji, items: s.items.map(({ html, meta }) => ({ html, meta })) })),
     appUrl,
-    footerNote: `Reminder fired at ${fireTime.slice(0, 5)} (your local time).`,
+    footerNote: `Scheduled for ${fireTime.slice(0, 5)} (${tz}). Change it in Settings → Reminders.`,
   });
-  const text = digest.flatLines.length
-    ? digest.flatLines.join('\n')
-    : `No ${prettyCategory(r.category).toLowerCase()} items right now — you're all clear.`;
+  const lines = sections.flatMap((s) => [`${s.emoji} ${s.title}`, ...s.items.map((i) => i.line)]);
+  const text = lines.length ? lines.join('\n') : `Nothing on your ${label.toLowerCase()} list right now — you're all clear.`;
+  const telegram = `🔔 *${escapeTelegram(subject)}*\n\n${escapeTelegram(text)}`.slice(0, 3900);
 
-  let channel = 'none';
-  let ok = false;
-  if ((r.channel === 'email' || r.channel === 'both' || r.channel === 'all') && r.profiles?.email) {
-    const m = await sendMail({ to: r.profiles.email, subject, html, user_id: r.user_id });
-    channel = m.channel;
-    ok = m.ok || ok;
-  }
-  if (r.channel === 'ntfy' || r.channel === 'both' || r.channel === 'all') {
-    const sent = await pushNtfy({
-      title: subject,
-      message: text.slice(0, 280),
-      topic: r.profiles?.ntfy_topic,
-      priority: 'default',
-      tags: ['bell'],
-      click: appUrl,
-    });
-    if (sent) { channel = channel === 'none' ? 'ntfy' : channel + '+ntfy'; ok = ok || sent; }
-  }
-  if ((r.channel === 'telegram' || r.channel === 'all') && r.profiles?.telegram_chat_id) {
-    const tgText = `🔔 *${subject}*\n\n${text.slice(0, 3800)}`;
-    const sent = await sendTelegram(r.profiles.telegram_chat_id, tgText);
-    if (sent) { channel = channel === 'none' ? 'telegram' : channel + '+telegram'; ok = ok || sent; }
-  }
+  const channels = parseChannels(r);
+  const outcome = await notifyUser(p, channels, { subject, html, text, telegram, click: appUrl, tags: ['bell'] });
+  const ok = outcome.delivered.length > 0;
 
-  // Log the fire (idempotent — primary key prevents duplicates)
-  await sb.from('reminder_log').insert({
-    reminder_id: r.id, fired_for: fireFor, fired_time: fireTime,
-  });
+  if (opts.record) {
+    await sb.from('reminder_log').upsert({
+      reminder_id: r.id, fired_for: fireDate, fired_time: fireTime,
+      status: ok ? 'sent' : 'failed', delivered_via: outcome.delivered, errors: outcome.errors,
+      attempts: opts.attemptsBefore + 1, updated_at: new Date().toISOString(),
+    }, { onConflict: 'reminder_id,fired_for,fired_time' });
+  }
+  return { ok, channels, delivered: outcome.delivered as Channel[], errors: outcome.errors };
+}
 
-  return { ok, channel };
+async function loadProfile(sb: ReturnType<typeof admin>, userId: string): Promise<Profile> {
+  const { data } = await sb.from('profiles').select('user_id,email,full_name,timezone,ntfy_topic,telegram_chat_id').eq('user_id', userId).maybeSingle();
+  return { user_id: userId, ...(data ?? {}) } as Profile;
 }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders() });
   const sb = admin();
-  const appUrl = (await getSecret('APP_URL')) ?? 'https://plynth.netlify.app';
+  const appUrl = (await getSecret('APP_URL')) ?? DEFAULT_APP_URL;
 
-  // Manual test path
-  let testId: string | null = null;
-  if (req.method === 'POST') {
-    try { const body = await req.json(); testId = body?.test_reminder_id ?? null; } catch { /* ignore */ }
-  }
+  const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
+  const bearer = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '');
+  const serviceKeys = [Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'), Deno.env.get('SERVICE_ROLE_KEY')].filter(Boolean);
+  const isInternal = !!bearer && serviceKeys.includes(bearer);
 
-  if (testId) {
-    const { data: r, error } = await sb.from('reminder_settings').select('*').eq('id', testId).maybeSingle();
-    if (error || !r) return json({ ok: false, error: error?.message ?? 'reminder not found' }, 404);
-    const { data: prof } = await sb.from('profiles').select('email,full_name,timezone,ntfy_topic,telegram_chat_id').eq('user_id', r.user_id).maybeSingle();
-    const row = { ...(r as any), profiles: prof ?? {} } as ReminderRow;
-    const now = new Date();
-    const fireFor = now.toISOString().slice(0, 10);
-    const fireTime = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:00`;
-    await sb.from('reminder_log').delete().eq('reminder_id', testId).eq('fired_for', fireFor).eq('fired_time', fireTime);
+  // ---- Manual test: only the reminder's owner (or the service key) ----
+  if (body?.test_reminder_id) {
+    const user = isInternal ? null : await userFromAuth(req);
+    if (!isInternal && !user) return json({ ok: false, error: 'unauthorized' }, 401);
+    const { data: r } = await sb.from('reminder_settings').select('*').eq('id', body.test_reminder_id).maybeSingle();
+    if (!r || (user && r.user_id !== user.id)) return json({ ok: false, error: 'reminder not found' }, 404);
+    const p = await loadProfile(sb, r.user_id);
+    const local = localParts(p.timezone, new Date());
+    const time = `${String(Math.floor(local.minutes / 60)).padStart(2, '0')}:${String(local.minutes % 60).padStart(2, '0')}:00`;
     try {
-      const res = await dispatchOne(sb, row, fireFor, fireTime, appUrl);
-      return json({ ok: res.ok, channel: res.channel, test: true });
+      const res = await dispatchOne(sb, r as ReminderRow, p, local.date, time, appUrl, { record: false, attemptsBefore: 0 });
+      return json({ ok: res.ok, channels: res.channels, delivered: res.delivered, errors: res.errors, test: true });
     } catch (e) {
-      return json({ ok: false, error: (e as Error).message, stack: (e as Error).stack }, 500);
+      return json({ ok: false, error: (e as Error).message }, 500);
     }
   }
 
-  const now = new Date();
-  const nowMin = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const dow = now.getUTCDay();
-  const today = now.toISOString().slice(0, 10);
+  if (!isInternal) return json({ error: 'unauthorized' }, 401);
 
+  // ---- Scheduled run ----
+  const now = new Date();
   const { data: rules } = await sb.from('reminder_settings').select('*').eq('enabled', true);
   const userIds = Array.from(new Set((rules ?? []).map((r) => r.user_id)));
   const { data: profs } = userIds.length
     ? await sb.from('profiles').select('user_id,email,full_name,timezone,ntfy_topic,telegram_chat_id').in('user_id', userIds)
     : { data: [] };
-  const profMap = new Map<string, any>((profs ?? []).map((p: any) => [p.user_id, p]));
+  const profMap = new Map<string, Profile>((profs ?? []).map((p: any) => [p.user_id, p as Profile]));
 
-  let dispatched = 0;
-  let skipped = 0;
+  let sent = 0, failed = 0, notDue = 0;
   for (const raw of rules ?? []) {
-    const r = { ...(raw as any), profiles: profMap.get(raw.user_id) ?? {} } as ReminderRow;
-    if (!r.days_of_week?.includes(dow)) { skipped++; continue; }
-    const tz = r.profiles?.timezone ?? 'Asia/Kolkata';
-    const offsetMin = -tzOffsetMinutes(tz, now);
+    const r = raw as ReminderRow;
+    const p = profMap.get(r.user_id);
+    if (!p) { notDue++; continue; }
+    const local = localParts(p.timezone, now);
+    const times = r.times_of_day?.length ? r.times_of_day : [r.time_of_day];
+    const fires = dueFires(local, times, r.days_of_week ?? [], GRACE_MIN);
+    if (!fires.length) { notDue++; continue; }
 
-    const times = (r.times_of_day && r.times_of_day.length) ? r.times_of_day : [r.time_of_day];
-    for (const t of times) {
-      if (!t) continue;
-      const localMin = nowMinFromTimeOfDay(t);
-      const targetUtcMin = ((localMin + offsetMin) + 1440) % 1440;
-      const elapsed = (nowMin - targetUtcMin + 1440) % 1440;
-      if (elapsed > GRACE_MIN) continue;
-
-      // Dedup: skip if we already fired for (reminder, today, t)
-      const { data: existing } = await sb.from('reminder_log')
-        .select('reminder_id').eq('reminder_id', r.id).eq('fired_for', today).eq('fired_time', t).maybeSingle();
-      if (existing) continue;
-
+    for (const f of fires) {
+      const { data: prev } = await sb.from('reminder_log').select('status,attempts')
+        .eq('reminder_id', r.id).eq('fired_for', f.date).eq('fired_time', f.time).maybeSingle();
+      if (prev && (prev.status === 'sent' || (prev.attempts ?? 1) >= MAX_ATTEMPTS)) continue;
       try {
-        const res = await dispatchOne(sb, r, today, t, appUrl);
-        if (res.ok) dispatched++;
+        const res = await dispatchOne(sb, r, p, f.date, f.time, appUrl, { record: true, attemptsBefore: prev?.attempts ?? 0 });
+        if (res.ok) sent++; else { failed++; console.warn('[send-reminder] nothing delivered', r.id, JSON.stringify(res.errors)); }
       } catch (e) {
-        console.error('dispatch failed', r.id, t, e);
+        failed++;
+        console.error('[send-reminder] dispatch failed', r.id, (e as Error).message);
       }
     }
   }
-  return json({ ok: true, dispatched, skipped, scanned: rules?.length ?? 0 });
+  return json({ ok: true, sent, failed, notDue, scanned: rules?.length ?? 0 });
 });
-
-function pad(n: number): string { return n.toString().padStart(2, '0'); }
-
-// Returns the offset (in minutes) of the given IANA timezone from UTC at the given instant.
-// Asia/Kolkata → +330. Falls back to 0 on unknown zones.
-function tzOffsetMinutes(tz: string, at: Date): number {
-  try {
-    const dtf = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hour12: false,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    });
-    const parts = dtf.formatToParts(at);
-    const map: Record<string, string> = {};
-    for (const p of parts) if (p.type !== 'literal') map[p.type] = p.value;
-    const asUtc = Date.UTC(
-      Number(map.year), Number(map.month) - 1, Number(map.day),
-      Number(map.hour) % 24, Number(map.minute), Number(map.second),
-    );
-    return Math.round((asUtc - at.getTime()) / 60000);
-  } catch { return 0; }
-}
-
-function nowMinFromTimeOfDay(t: string): number {
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
-}
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-}
-function prettyCategory(c: string): string {
-  return ({ all: 'Daily', tasks: 'Tasks', learning: 'Learning', finance: 'Finance', jobs: 'Jobs' } as Record<string, string>)[c] ?? c;
-}
-function greetingFor(): string {
-  const h = new Date().getUTCHours() + 5; // crude IST lean
-  const ist = (h + 24) % 24;
-  if (ist < 12) return 'Good morning';
-  if (ist < 17) return 'Good afternoon';
-  return 'Good evening';
-}

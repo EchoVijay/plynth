@@ -53,10 +53,13 @@ export function AlertsTab({ runSearch }: { runSearch: (filters: JobFilters) => v
         try { detail = (await (error as { context?: Response }).context?.json())?.error ?? detail; } catch { /* generic */ }
         throw new Error(detail);
       }
-      return data as { sent: boolean; matches: number; channels?: string[] };
+      return data as { sent: boolean; matches: number; channels?: string[]; errors?: Record<string, string> };
     },
     onSuccess: r => {
-      toast.success(r.matches === 0 ? 'No new jobs yet — nothing to send' : r.sent ? `Sent ${r.matches} new job${r.matches === 1 ? '' : 's'} via ${(r.channels ?? []).join(', ')}` : `${r.matches} new jobs found, but no channel could deliver`);
+      const failed = Object.entries(r.errors ?? {}).map(([c, e]) => `${c}: ${e}`).join('; ');
+      if (r.matches === 0) toast.success('No new jobs yet — nothing to send');
+      else if (r.sent) toast.success(`Sent ${r.matches} new job${r.matches === 1 ? '' : 's'} via ${(r.channels ?? []).join(', ')}`, failed ? { description: `Not delivered — ${failed}` } : undefined);
+      else toast.error('Found new jobs but could not deliver them', { description: failed || 'No channel accepted the message.' });
       qc.invalidateQueries({ queryKey: ['job-searches', userId] });
     },
     onError: (e: Error) => toast.error(e.message),

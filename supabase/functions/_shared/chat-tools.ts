@@ -6,6 +6,8 @@ import { getJob, searchJobs } from './freehire.ts';
 import { sanitizeFilters } from './pure/job-filters.ts';
 import { matchJob } from './pure/job-match.ts';
 import { formatSalary } from './pure/job-shape.ts';
+import { addDaysYmd, localParts } from './pure/tz.ts';
+import { loadOverview, userTimezone } from './overview.ts';
 
 type Tool = {
   name: string;
@@ -18,8 +20,9 @@ function ymString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+/** "Today" in the user's own timezone (the server clock is UTC, which is a day behind in India until 05:30). */
+async function todayFor(sb: SupabaseClient, userId: string): Promise<string> {
+  return localParts(await userTimezone(sb, userId), new Date()).date;
 }
 
 function shiftDays(date: string, delta: number): string {
@@ -102,7 +105,7 @@ export const TOOLS: Tool[] = [
     description: "Daily learning plan items for a date or date-range. Defaults to today and next 7 days. Use range='overdue' for past pending items.",
     args_schema: '{"date?":"YYYY-MM-DD", "range?":"today|upcoming|overdue|week"}',
     run: async (sb, userId, args) => {
-      const today = todayISO();
+      const today = await todayFor(sb, userId);
       let from = today, to = shiftDays(today, 7);
       const range = (args.range as string) || (args.date ? '' : 'upcoming');
       if (args.date) { from = String(args.date); to = String(args.date); }
@@ -124,7 +127,7 @@ export const TOOLS: Tool[] = [
     description: "User's todos. Filter by status (pending|in_progress|completed) or due_window (today|overdue|week). By default returns all non-completed tasks.",
     args_schema: '{"status?":"pending|in_progress|completed", "due_window?":"today|overdue|week"}',
     run: async (sb, userId, args) => {
-      const today = todayISO();
+      const today = await todayFor(sb, userId);
       let q = sb.from('tasks').select('id,title,description,priority,status,due_date,category_id,task_categories(name)').eq('user_id', userId);
       if (args.status) q = q.eq('status', String(args.status));
       else q = q.in('status', ['pending', 'in_progress']);
@@ -201,6 +204,116 @@ export const TOOLS: Tool[] = [
   },
 
   {
+    name: 'get_schedule',
+    description: "The user's agenda for a day or range: calendar events and work blocks (including repeating ones), tasks due or overdue, learning plan items, EMIs and subscription renewals, job follow-ups. Use for 'what is my schedule / plan / agenda / what do I have today, tomorrow, this week, on <date>'.",
+    args_schema: '{"range?":"today|tomorrow|week|next_week","date?":"YYYY-MM-DD","from?":"YYYY-MM-DD","to?":"YYYY-MM-DD"}',
+    run: async (sb, userId, args) => {
+      const tz = await userTimezone(sb, userId);
+      const today = localParts(tz, new Date()).date;
+      const dow = new Date(today + 'T00:00:00Z').getUTCDay();
+      const mondayOffset = (dow + 6) % 7;
+      const ymd = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+      let from = today, to = today;
+      const range = String(args.range ?? '');
+      if (ymd(args.date)) { from = to = ymd(args.date)!; }
+      else if (ymd(args.from)) { from = ymd(args.from)!; to = ymd(args.to) ?? from; }
+      else if (range === 'tomorrow') { from = to = addDaysYmd(today, 1); }
+      else if (range === 'week') { from = today; to = addDaysYmd(today, 6); }
+      else if (range === 'next_week') { from = addDaysYmd(today, 7 - mondayOffset); to = addDaysYmd(from, 6); }
+      if (to < from) to = from;
+      if (new Date(to).getTime() - new Date(from).getTime() > 31 * 86400000) to = addDaysYmd(from, 31);
+      const ov = await loadOverview(sb, userId, { tz, from, to });
+      const nothing = !ov.events.length && !ov.tasks.length && !ov.learning.length && !ov.emis.length && !ov.subscriptions.length;
+      return {
+        today, timezone: tz, from, to,
+        calendar_events: ov.events, tasks: ov.tasks, learning_plan: ov.learning,
+        emis_due: ov.emis, subscription_renewals: ov.subscriptions, job_followups: ov.jobs,
+        note: nothing ? 'Nothing is scheduled in this range.' : undefined,
+      };
+    },
+  },
+
+  {
+    name: 'list_bookmarks',
+    description: "The user's saved bookmarks/links. Optional text search q and category.",
+    args_schema: '{"q?":"text","category?":"..."}',
+    run: async (sb, userId, args) => {
+      let q = sb.from('bookmarks').select('title,url,category,description,created_at').eq('user_id', userId);
+      if (args.category) q = q.eq('category', String(args.category));
+      if (args.q) q = q.or(`title.ilike.%${String(args.q).replace(/[%,]/g, ' ')}%,description.ilike.%${String(args.q).replace(/[%,]/g, ' ')}%`);
+      const { data } = await q.order('created_at', { ascending: false }).limit(30);
+      return data ?? [];
+    },
+  },
+
+  {
+    name: 'list_documents',
+    description: "Documents in the user's vault: title, category, file name, remarks, upload date (metadata only — file contents are never read).",
+    args_schema: '{"category?":"aadhaar|pan|passport|insurance|rental_agreement|driving_license|other"}',
+    run: async (sb, userId, args) => {
+      let q = sb.from('documents').select('title,category,file_name,mime_type,size_bytes,remarks,created_at').eq('user_id', userId);
+      if (args.category) q = q.eq('category', String(args.category));
+      const { data } = await q.order('created_at', { ascending: false }).limit(50);
+      return data ?? [];
+    },
+  },
+
+  {
+    name: 'list_subscriptions',
+    description: "Recurring subscriptions with amount, billing cycle and next renewal date, plus the monthly total of active ones.",
+    args_schema: '{"status?":"active|paused|cancelled"}',
+    run: async (sb, userId, args) => {
+      let q = sb.from('subscriptions').select('name,amount,category,billing_cycle,next_renewal_date,status,payment_method').eq('user_id', userId);
+      q = q.eq('status', String(args.status ?? 'active'));
+      const { data } = await q.order('next_renewal_date', { ascending: true }).limit(60);
+      const rows = data ?? [];
+      const monthly = rows.reduce((sum, r) => sum + Number(r.amount) / (r.billing_cycle === 'yearly' ? 12 : r.billing_cycle === 'quarterly' ? 3 : r.billing_cycle === 'weekly' ? 1 / 4.345 : 1), 0);
+      return { subscriptions: rows, approx_monthly_total: Math.round(monthly) };
+    },
+  },
+
+  {
+    name: 'get_wellness',
+    description: "Water intake and sleep logs for the last N days (default 7) with goals and averages.",
+    args_schema: '{"days?":7}',
+    run: async (sb, userId, args) => {
+      const today = await todayFor(sb, userId);
+      const days = Math.min(Math.max(Number(args.days) || 7, 1), 30);
+      const since = shiftDays(today, -(days - 1));
+      const [water, sleep] = await Promise.all([
+        sb.from('water_logs').select('log_date,glasses,goal').eq('user_id', userId).gte('log_date', since).order('log_date', { ascending: false }),
+        sb.from('sleep_logs').select('log_date,sleep_time,wake_time,total_hours,quality').eq('user_id', userId).gte('log_date', since).order('log_date', { ascending: false }),
+      ]);
+      const sl = sleep.data ?? [];
+      const avgSleep = sl.length ? Math.round((sl.reduce((a, r) => a + Number(r.total_hours ?? 0), 0) / sl.length) * 10) / 10 : null;
+      return { today, water: water.data ?? [], sleep: sl, avg_sleep_hours: avgSleep };
+    },
+  },
+
+  {
+    name: 'get_reminders',
+    description: "The user's notification reminders (what is sent, when, over which channels) and whether the last delivery worked.",
+    args_schema: '{}',
+    run: async (sb, userId) => {
+      const [rules, prof] = await Promise.all([
+        sb.from('reminder_settings').select('id,category,channels,times_of_day,days_of_week,enabled').eq('user_id', userId),
+        sb.from('profiles').select('email,timezone,ntfy_topic,telegram_chat_id').eq('user_id', userId).maybeSingle(),
+      ]);
+      const ids = (rules.data ?? []).map((r) => r.id);
+      const { data: logs } = ids.length
+        ? await sb.from('reminder_log').select('reminder_id,status,delivered_via,errors,updated_at').in('reminder_id', ids).order('updated_at', { ascending: false }).limit(50)
+        : { data: [] as any[] };
+      const lastBy = new Map<string, any>();
+      for (const l of logs ?? []) if (!lastBy.has(l.reminder_id)) lastBy.set(l.reminder_id, l);
+      return {
+        timezone: prof.data?.timezone, email: prof.data?.email,
+        telegram_linked: !!prof.data?.telegram_chat_id, push_topic_set: !!prof.data?.ntfy_topic,
+        reminders: (rules.data ?? []).map((r) => ({ ...r, last_delivery: lastBy.get(r.id) ?? null })),
+      };
+    },
+  },
+
+  {
     name: 'get_period_info',
     description: "Period tracker: current cycle phase, next period prediction, recent symptoms. Only works if user has enabled period tracking.",
     args_schema: '{}',
@@ -270,7 +383,7 @@ export const TOOLS: Tool[] = [
     description: "Today's habits: which are due, completed count, and current streaks.",
     args_schema: '{}',
     run: async (sb, userId) => {
-      const today = todayISO();
+      const today = await todayFor(sb, userId);
       const { data: habits } = await sb.from('habits').select('id,name,emoji,frequency,custom_days,target_per_day')
         .eq('user_id', userId).eq('archived', false);
       const dow = new Date().getDay();
@@ -295,7 +408,7 @@ export const TOOLS: Tool[] = [
     description: "Daily expenses for a date range. Defaults to current month if no range given.",
     args_schema: '{"from_date?":"YYYY-MM-DD","to_date?":"YYYY-MM-DD"}',
     run: async (sb, userId, args) => {
-      const today = todayISO();
+      const today = await todayFor(sb, userId);
       const fromDate = (args.from_date as string) || today.slice(0, 8) + '01';
       const toDate = (args.to_date as string) || today;
       const { data } = await sb.from('daily_expenses').select('amount,category,description,expense_date,payment_method')
@@ -314,7 +427,7 @@ export const TOOLS: Tool[] = [
     description: "Focus timer stats: today's sessions, 30-day totals, trees grown, total focus time.",
     args_schema: '{}',
     run: async (sb, userId) => {
-      const today = todayISO();
+      const today = await todayFor(sb, userId);
       const since30 = shiftDays(today, -30);
       const { data: todaySessions } = await sb.from('focus_sessions')
         .select('tree_species,actual_seconds,status,mode')

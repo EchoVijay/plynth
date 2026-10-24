@@ -117,5 +117,44 @@ def send_mail():
     }), (200 if ok else 502)
 
 
+@app.route("/api/push", methods=["POST"])
+def push():
+    """Relay a push to ntfy.sh from this machine's IP.
+
+    ntfy.sh rate-limits by source IP, and Supabase's shared egress IPs often hit it (HTTP 429);
+    the edge functions fall back to this endpoint when that happens.
+    """
+    if not _check_auth():
+        return jsonify({"error": "unauthorized"}), 401
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    data = request.get_json(silent=True) or {}
+    topic = (data.get("topic") or "").strip()
+    message = data.get("message") or ""
+    if not topic or not message:
+        return jsonify({"error": "topic and message required"}), 400
+
+    headers = {"Title": str(data.get("title") or "Plynth").encode("latin-1", "ignore").decode("latin-1")}
+    if data.get("priority"):
+        headers["Priority"] = str(data["priority"])
+    if data.get("tags"):
+        headers["Tags"] = ",".join(str(t) for t in data["tags"])
+    if data.get("click"):
+        headers["Click"] = str(data["click"])
+    req = urllib.request.Request(
+        "https://ntfy.sh/" + urllib.parse.quote(topic, safe=""),
+        data=message.encode("utf-8"), headers=headers, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return jsonify({"success": 200 <= resp.status < 300, "status": resp.status})
+    except urllib.error.HTTPError as e:
+        return jsonify({"success": False, "status": e.code}), 502
+    except Exception as e:  # network errors
+        return jsonify({"success": False, "error": str(e)}), 502
+
+
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5556")), debug=False)

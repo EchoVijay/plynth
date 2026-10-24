@@ -16,8 +16,9 @@
 //   { error: "..." }                         — fatal
 
 import { admin, json, corsHeaders, userFromAuth } from '../_shared/util.ts';
-import { groqChatJSON, groqChatStream, type ChatMsg, type GroqRateLimit } from '../_shared/groq.ts';
+import { groqChatJSONResilient as groqChatJSON, groqChatStreamResilient as groqChatStream, type ChatMsg, type GroqRateLimit } from '../_shared/groq.ts';
 import { runTool, toolsCatalogText, toolsCatalogFiltered } from '../_shared/chat-tools.ts';
+import { localParts } from '../_shared/pure/tz.ts';
 
 const MAX_HISTORY = 8;
 const MAX_TOOL_LOOPS = 3;
@@ -38,17 +39,15 @@ const TOOL_PAGE_MAP: Record<string, string> = {
   get_habits_today: 'habits',
   list_daily_expenses: 'finance',
   get_focus_summary: 'focus',
+  list_bookmarks: 'bookmarks',
+  list_documents: 'documents_vault',
+  list_subscriptions: 'subscriptions',
+  get_wellness: 'wellness',
 };
 
-// Default page visibility (matches ALL_PAGES in AppShell)
-const PAGE_DEFAULTS: Record<string, boolean> = {
-  learning: true, jobs: true, todos: true, notes: true,
-  finance: true, chat: true,
-  calendar: false, period_tracker: false, documents_vault: false, bookmarks: false, focus: false,
-};
-
+// Data stays answerable even for pages hidden from the sidebar; only an explicit opt-out disables a tool.
 function isEnabled(ep: Record<string, boolean> | null, key: string): boolean {
-  return (ep ?? {})[key] ?? PAGE_DEFAULTS[key] ?? false;
+  return (ep ?? {})[key] !== false;
 }
 
 // Words that suggest the user is asking about their own Plynth data.
@@ -69,7 +68,31 @@ const USER_DATA_KEYWORDS = [
   'expense', 'spent', 'spend', 'daily spend',
   'focus', 'pomodoro', 'timer', 'tree', 'forest',
   'profile',
+  'schedule', 'agenda', 'calendar', 'event', 'events', 'meeting', 'meetings', 'appointment', 'work block', 'planned', 'what do i have', 'free time', 'busy',
+  'bookmark', 'bookmarks', 'saved link', 'document', 'documents', 'passport', 'aadhaar', 'pan card', 'insurance',
+  'subscription', 'subscriptions', 'renew', 'renewal', 'netflix',
+  'water', 'sleep', 'slept', 'hydrat',
+  'reminder', 'reminders', 'notification', 'notifications', 'telegram', 'email me',
+  'budget', 'salary', 'finance', 'paid', 'due',
 ];
+function scheduleArgsFor(msg: string): Record<string, unknown> {
+  if (/\btomorrow\b/i.test(msg)) return { range: 'tomorrow' };
+  if (/\bnext week\b/i.test(msg)) return { range: 'next_week' };
+  if (/\b(this week|week)\b/i.test(msg)) return { range: 'week' };
+  return { range: 'today' };
+}
+
+// Safety net: when the model skips tools on an obvious data question, pick the tool from keywords
+// so it never answers from imagination.
+const KEYWORD_FALLBACK: { re: RegExp; tool: string; args: Record<string, unknown> }[] = [
+  { re: /\b(schedule|agenda|calendar|meetings?|appointments?|work blocks?|what do i have)\b/i, tool: 'get_schedule', args: { range: 'today' } },
+  { re: /\bbookmarks?\b|saved links?/i, tool: 'list_bookmarks', args: {} },
+  { re: /\bdocuments?\b|\b(passport|aadhaar|pan card)\b/i, tool: 'list_documents', args: {} },
+  { re: /\bsubscriptions?\b|\brenewals?\b/i, tool: 'list_subscriptions', args: {} },
+  { re: /\b(water|sleep|slept)\b/i, tool: 'get_wellness', args: {} },
+  { re: /\breminders?\b/i, tool: 'get_reminders', args: {} },
+];
+
 function looksLikeUserData(text: string): boolean {
   const t = ' ' + text.toLowerCase() + ' ';
   return USER_DATA_KEYWORDS.some((kw) => t.includes(kw.length === 2 ? ` ${kw} ` : kw));
@@ -79,11 +102,11 @@ function sseLine(obj: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-function systemPromptDecide(catalogText: string): string {
-  const now = new Date();
-  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+function systemPromptDecide(catalogText: string, today: string, tz: string): string {
+  const ym = today.slice(0, 7);
+  const now = { getFullYear: () => Number(today.slice(0, 4)) };
   return [
-    `Today=${now.toISOString().slice(0, 10)} (year=${now.getFullYear()}, current_month=${ym}). Months: Jan=01..Dec=12.`,
+    `Today=${today} (${tz}; year=${now.getFullYear()}, current_month=${ym}). Months: Jan=01..Dec=12.`,
     "You route a user message to ONE tool, or skip tools.",
     "Tools (user-scoped, read-only):",
     catalogText,
@@ -92,12 +115,12 @@ function systemPromptDecide(catalogText: string): string {
     '  {"action":"tool","tool":"<name>","args":{...}}  OR  {"action":"final"}',
     "",
     "Pick a tool when the user asks about THEIR data (my/our/this month/today/EMI/loan/budget/expense/balance/task/learning/topic/job/profile).",
-    `Examples: "may EMI total"→{"action":"tool","tool":"get_finance_summary","args":{"year_month":"${now.getFullYear()}-05"}}; "active loans"→{"action":"tool","tool":"list_loans","args":{"status":"active"}}; "my todos"→{"action":"tool","tool":"list_tasks","args":{}}; "tasks due today"→{"action":"tool","tool":"list_tasks","args":{"due_window":"today"}}; "overdue tasks"→{"action":"tool","tool":"list_tasks","args":{"due_window":"overdue"}}; "find remote react jobs"→{"action":"tool","tool":"search_jobs","args":{"q":"react","work_mode":["remote"]}}; "which applications went quiet"→{"action":"tool","tool":"list_jobs","args":{"status":"applied"}}.`,
+    `Examples: "may EMI total"→{"action":"tool","tool":"get_finance_summary","args":{"year_month":"${now.getFullYear()}-05"}}; "active loans"→{"action":"tool","tool":"list_loans","args":{"status":"active"}}; "my todos"→{"action":"tool","tool":"list_tasks","args":{}}; "tasks due today"→{"action":"tool","tool":"list_tasks","args":{"due_window":"today"}}; "overdue tasks"→{"action":"tool","tool":"list_tasks","args":{"due_window":"overdue"}}; "what is my schedule today"→{"action":"tool","tool":"get_schedule","args":{"range":"today"}}; "what do I have tomorrow / this week"→{"action":"tool","tool":"get_schedule","args":{"range":"tomorrow"}}; "my reminders"→{"action":"tool","tool":"get_reminders","args":{}}; "show my bookmarks"→{"action":"tool","tool":"list_bookmarks","args":{}}; "my subscriptions"→{"action":"tool","tool":"list_subscriptions","args":{}}; "find remote react jobs"→{"action":"tool","tool":"search_jobs","args":{"q":"react","work_mode":["remote"]}}; "which applications went quiet"→{"action":"tool","tool":"list_jobs","args":{"status":"applied"}}.`,
     'For general knowledge (definitions, code help, world facts) → {"action":"final"}.',
   ].join('\n');
 }
 
-function systemPromptCompose(hasToolResults: boolean): string {
+function systemPromptCompose(hasToolResults: boolean, today: string, tz: string): string {
   const base = "You are Plynth's personal assistant. Reply in clean Markdown, **as briefly as possible** — short sentences, tight bullets, no preamble, no closing pleasantries.";
   if (!hasToolResults) {
     return base + "\nFor general conversation, greetings, or questions unrelated to user data, respond naturally and helpfully. Do NOT mention tasks, budgets, or data unless the user asked about them.";
@@ -107,6 +130,8 @@ function systemPromptCompose(hasToolResults: boolean): string {
     "If a tool result appears above, USE its numbers directly. Do not ask the user for clarification about data the tools already returned.",
     "For EMI/loan/budget questions: give the total first, then list each loan as one short bullet (`- Name: ₹amount`). Format INR with the ₹ sign and thousands separators.",
     "If a tool result is empty (no rows / total = 0), say so plainly in one sentence. Never fabricate numbers, dates, or names.",
+    `Today is ${today} (${tz}).`,
+    "For schedule/agenda answers: list calendar events in time order as `- 3:00 PM–4:30 PM · Title (location)` (all-day ones first), then tasks due/overdue, learning items, bills and job follow-ups that appear in the tool result. Mention only what the result contains; if every list is empty say nothing is scheduled.",
   ].join('\n');
 }
 
@@ -121,7 +146,7 @@ async function loadHistory(sb: ReturnType<typeof admin>, userId: string, convers
   const msgs: ChatMsg[] = [];
   for (const r of rows) {
     if (r.role === 'tool') {
-      msgs.push({ role: 'user', content: `[Tool result: ${r.tool_name}]\n${JSON.stringify(r.tool_output).slice(0, 4000)}` });
+      msgs.push({ role: 'user', content: `[Tool result: ${r.tool_name}]\n${JSON.stringify(r.tool_output).slice(0, 6000)}` });
     } else if (r.role === 'user' || r.role === 'assistant' || r.role === 'system') {
       msgs.push({ role: r.role, content: r.content });
     }
@@ -200,12 +225,14 @@ Deno.serve(async (req) => {
   const conversationId = await ensureConversation(sb, user.id, body.conversation_id, message);
 
   // Fetch enabled_pages to filter tools
-  const { data: profileRow } = await sb.from('profiles').select('enabled_pages').eq('user_id', user.id).maybeSingle();
+  const { data: profileRow } = await sb.from('profiles').select('enabled_pages,timezone').eq('user_id', user.id).maybeSingle();
+  const tz = (profileRow?.timezone as string | undefined) || 'Asia/Kolkata';
+  const today = localParts(tz, new Date()).date;
   const ep: Record<string, boolean> | null = (profileRow?.enabled_pages as Record<string, boolean>) ?? null;
 
   // Build set of allowed tool names (always include tools not mapped to a page)
   const allowedTools = new Set<string>();
-  for (const t of ['get_profile']) allowedTools.add(t); // always-on tools
+  for (const t of ['get_profile', 'get_schedule', 'get_reminders']) allowedTools.add(t); // always-on tools
   for (const [toolName, pageKey] of Object.entries(TOOL_PAGE_MAP)) {
     if (isEnabled(ep, pageKey)) allowedTools.add(toolName);
   }
@@ -236,7 +263,7 @@ Deno.serve(async (req) => {
           // Decide turn only needs the latest user message — sending full
           // history slows prompt eval significantly on CPU.
           const decideMessages: ChatMsg[] = [
-            { role: 'system', content: systemPromptDecide(catalogText) },
+            { role: 'system', content: systemPromptDecide(catalogText, today, tz) },
             { role: 'user', content: message },
           ];
 
@@ -257,8 +284,23 @@ Deno.serve(async (req) => {
                 content: '', tool_name: parsed.tool, tool_input: parsed.args ?? {}, tool_output: result as object,
               });
               decideMessages.push({ role: 'assistant', content: JSON.stringify({ action: 'tool', tool: parsed.tool, args: parsed.args ?? {} }) });
-              decideMessages.push({ role: 'user', content: `[Tool result: ${parsed.tool}]\n${JSON.stringify(result).slice(0, 4000)}` });
+              decideMessages.push({ role: 'user', content: `[Tool result: ${parsed.tool}]\n${JSON.stringify(result).slice(0, 6000)}` });
               continue;
+            }
+            if (i === 0) {
+              const fb = KEYWORD_FALLBACK.find((k) => k.re.test(message) && allowedTools.has(k.tool));
+              if (fb) {
+                const args = fb.tool === 'get_schedule' ? scheduleArgsFor(message) : fb.args;
+                send({ tool_call: { name: fb.tool, args } });
+                let result: unknown; let ok = true;
+                try { result = await runTool(sb, user.id, fb.tool, args); }
+                catch (e) { ok = false; result = { error: (e as Error).message }; }
+                send({ tool_result: { name: fb.tool, ok } });
+                await sb.from('chat_messages').insert({
+                  conversation_id: conversationId, user_id: user.id, role: 'tool',
+                  content: '', tool_name: fb.tool, tool_input: args, tool_output: result as object,
+                });
+              }
             }
             break; // action === 'final'
           }
@@ -268,7 +310,7 @@ Deno.serve(async (req) => {
         const finalHistory = await loadHistory(sb, user.id, conversationId);
         const hasToolResults = finalHistory.some(m => m.content.startsWith('[Tool result:'));
         const composeMessages: ChatMsg[] = [
-          { role: 'system', content: systemPromptCompose(hasToolResults) },
+          { role: 'system', content: systemPromptCompose(hasToolResults, today, tz) },
           ...finalHistory,
         ];
 

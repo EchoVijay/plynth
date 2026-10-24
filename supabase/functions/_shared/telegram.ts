@@ -10,23 +10,43 @@ async function botToken(): Promise<string> {
   return t;
 }
 
-export async function sendTelegram(chatId: number | bigint, text: string, opts?: {
+export async function sendTelegramResult(chatId: number | bigint, text: string, opts?: {
   parseMode?: 'Markdown' | 'HTML';
   disablePreview?: boolean;
-}): Promise<boolean> {
+}): Promise<{ ok: boolean; error?: string }> {
   const token = await botToken();
-  try {
+  const post = async (parseMode?: string) => {
     const r = await fetch(`${API}${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: opts?.parseMode ?? 'Markdown',
+        chat_id: typeof chatId === 'bigint' ? chatId.toString() : chatId,
+        text: text.slice(0, 4000),
+        ...(parseMode ? { parse_mode: parseMode } : {}),
         disable_web_page_preview: opts?.disablePreview ?? true,
       }),
+      signal: AbortSignal.timeout(12_000),
     });
-    return r.ok;
+    return { ok: r.ok, status: r.status, body: r.ok ? '' : (await r.text()).slice(0, 200) };
+  };
+  try {
+    let res = await post(opts?.parseMode ?? 'Markdown');
+    // A stray * or _ in a task title makes Telegram reject the whole message; resend it as plain text.
+    if (!res.ok && res.status === 400 && /parse entities/i.test(res.body)) res = await post(undefined);
+    if (res.ok) return { ok: true };
+    const blocked = res.status === 403;
+    return { ok: false, error: blocked ? 'telegram: bot was blocked or chat not started' : `telegram ${res.status}: ${res.body}` };
+  } catch (e) {
+    return { ok: false, error: `telegram unreachable: ${(e as Error).message}` };
+  }
+}
+
+export async function sendTelegram(chatId: number | bigint, text: string, opts?: {
+  parseMode?: 'Markdown' | 'HTML';
+  disablePreview?: boolean;
+}): Promise<boolean> {
+  try {
+    return (await sendTelegramResult(chatId, text, opts)).ok;
   } catch {
     return false;
   }

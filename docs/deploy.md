@@ -55,6 +55,20 @@ cloudflared tunnel --url http://127.0.0.1:5556
 # Copy the printed URL → supabase secrets set MAIL_BRIDGE_URL=...
 ```
 
+### Scheduled jobs (reminders, calendar alerts, job digests)
+
+pg_cron calls edge functions through `invoke_edge()`, which reads two Vault secrets. Without them every
+cron run raises an error and no reminder is ever sent:
+
+```sql
+select vault.create_secret('https://<ref>.supabase.co', 'PROJECT_URL');
+select vault.create_secret('<service role key>', 'SERVICE_ROLE_KEY');
+```
+
+Migrations 0031 (fixes the ambiguous `name` column in `invoke_edge`) and 0032 (multi-channel reminders,
+delivery status in `reminder_log`) are required. Optional: `supabase secrets set NTFY_TOKEN=...`.
+`send-mail` accepts only the service-role key (or `SEND_MAIL_TOKEN`).
+
 ## 3. Frontend (Netlify)
 
 ```bash

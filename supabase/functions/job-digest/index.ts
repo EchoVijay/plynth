@@ -8,9 +8,7 @@ import { sanitizeFilters } from '../_shared/pure/job-filters.ts';
 import { digestLines, escapeTelegram, isSearchDue, newSince, openWindowDays, watermark, type Frequency } from '../_shared/pure/job-digest.ts';
 import { describeFilters } from '../_shared/pure/job-filters.ts';
 import { renderDigestEmail } from '../_shared/mail-template.ts';
-import { sendMail } from '../_shared/mail.ts';
-import { pushNtfy } from '../_shared/ntfy.ts';
-import { sendTelegram } from '../_shared/telegram.ts';
+import { notifyUser, type Channel } from '../_shared/notify.ts';
 
 const MAX_SEARCHES_PER_RUN = 40;
 
@@ -32,7 +30,7 @@ async function processSearch(sb: ReturnType<typeof admin>, s: SearchRow, forced:
 
   if (!fresh.length) {
     if (!forced) await sb.from('job_saved_searches').update({ last_run_at: now.toISOString(), last_match_count: 0 }).eq('id', s.id);
-    return { matches: 0, sent: false, channels: [] as string[] };
+    return { matches: 0, sent: false, channels: [] as string[], errors: {} as Record<string, string> };
   }
 
   const { data: prof } = await sb.from('profiles').select('email,full_name,ntfy_topic,telegram_chat_id').eq('user_id', s.user_id).maybeSingle();
@@ -40,41 +38,33 @@ async function processSearch(sb: ReturnType<typeof admin>, s: SearchRow, forced:
   const { shown, more } = digestLines(fresh);
   const link = `${appUrl}/jobs?tab=find`;
   const subject = `💼 ${fresh.length}${res.total > 50 && fresh.length >= 50 ? '+' : ''} new job${fresh.length === 1 ? '' : 's'} · ${s.name}`;
-  const channels = s.channels?.length ? s.channels : ['email'];
-  const delivered: string[] = [];
+  const channels = (s.channels?.length ? s.channels : ['email']) as Channel[];
 
-  if (channels.includes('email') && p.email) {
-    const html = renderDigestEmail({
-      greeting: `${p.full_name ? p.full_name.split(' ')[0] + ', ' : ''}new matches for “${s.name}”`,
-      intro: `${describeFilters(sanitizeFilters(s.query))}`,
-      sections: [{
-        title: 'New jobs', emoji: '💼',
-        items: shown.map((j) => ({
-          html: `<a href="${esc(j.url)}" style="color:#6366f1;text-decoration:none"><b>${esc(j.title)}</b></a>`,
-          meta: [j.company, j.location].filter(Boolean).join(' · '),
-        })).concat(more ? [{ html: `<i>…and ${more} more in Plynth</i>`, meta: '' }] : []),
-      }],
-      appUrl: link,
-      footerNote: 'You get this because you turned on alerts for this search. Change it in Jobs → Alerts.',
-    });
-    const m = await sendMail({ to: p.email, subject, html, user_id: s.user_id });
-    if (m.ok) delivered.push('email');
-  }
-  if (channels.includes('ntfy')) {
-    const text = shown.slice(0, 5).map((j) => `• ${j.title} @ ${j.company}`).join('\n') + (fresh.length > 5 ? `\n+${fresh.length - 5} more` : '');
-    if (await pushNtfy({ title: subject, message: text.slice(0, 280), topic: p.ntfy_topic, tags: ['briefcase'], click: link })) delivered.push('push');
-  }
-  if (channels.includes('telegram') && p.telegram_chat_id) {
-    const lines = shown.map((j) => `• [${escapeTelegram(j.title)}](${j.url.replace(/\)/g, '%29')}) — ${escapeTelegram(j.company)}`).join('\n');
-    const text = `💼 *${escapeTelegram(subject)}*\n\n${lines}${more ? `\n…and ${more} more` : ''}`;
-    if (await sendTelegram(p.telegram_chat_id, text.slice(0, 3900))) delivered.push('telegram');
-  }
+  const html = renderDigestEmail({
+    greeting: `${p.full_name ? p.full_name.split(' ')[0] + ', ' : ''}new matches for “${s.name}”`,
+    intro: `${describeFilters(sanitizeFilters(s.query))}`,
+    sections: [{
+      title: 'New jobs', emoji: '💼',
+      items: shown.map((j) => ({
+        html: `<a href="${esc(j.url)}" style="color:#6366f1;text-decoration:none"><b>${esc(j.title)}</b></a>`,
+        meta: [j.company, j.location].filter(Boolean).join(' · '),
+      })).concat(more ? [{ html: `<i>…and ${more} more in Plynth</i>`, meta: '' }] : []),
+    }],
+    appUrl: link,
+    footerNote: 'You get this because you turned on alerts for this search. Change it in Jobs → Alerts.',
+  });
+  const pushText = shown.slice(0, 5).map((j) => `• ${j.title} @ ${j.company}`).join('\n') + (fresh.length > 5 ? `\n+${fresh.length - 5} more` : '');
+  const lines = shown.map((j) => `• [${escapeTelegram(j.title)}](${j.url.replace(/\)/g, '%29')}) — ${escapeTelegram(j.company)}`).join('\n');
+  const telegram = `💼 *${escapeTelegram(subject)}*\n\n${lines}${more ? `\n…and ${more} more` : ''}`;
+
+  const outcome = await notifyUser({ user_id: s.user_id, ...p }, channels, { subject, html, text: pushText, telegram, click: link, tags: ['briefcase'] });
+  const delivered = outcome.delivered as string[];
 
   // Only move the watermark when something was delivered, so a failed send is retried next hour.
   if (!forced && delivered.length) {
     await sb.from('job_saved_searches').update({ last_run_at: now.toISOString(), last_match_count: fresh.length }).eq('id', s.id);
   }
-  return { matches: fresh.length, sent: delivered.length > 0, channels: delivered };
+  return { matches: fresh.length, sent: delivered.length > 0, channels: delivered, errors: outcome.errors };
 }
 
 Deno.serve(async (req) => {

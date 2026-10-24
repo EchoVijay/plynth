@@ -85,3 +85,22 @@ ls -lh /home/vijay/ngrok-remote-manager/state/email_queue.jsonl
 ls -lh /home/vijay/plynth/mail-bridge/state/email_queue.jsonl
 # This is the bridge's separate queue.
 ```
+
+## Always-on tunnel (systemd)
+
+Supabase edge functions reach the bridge through a Cloudflare quick tunnel. The URL changes on every
+restart, so `tunnel-publish.sh` starts the tunnel, checks `/api/health`, and publishes the URL to the
+`system_kv` table (`mail_bridge_url`). Edge functions read it from there (or from the `MAIL_BRIDGE_URL`
+secret if set).
+
+```bash
+# env file (mode 600): PROJECT_URL=https://<ref>.supabase.co  and  SERVICE_ROLE_KEY=<service role key>
+$EDITOR ~/.config/plynth-mail-tunnel.env && chmod 600 ~/.config/plynth-mail-tunnel.env
+sudo cp mail-bridge/systemd/plynth-mail-tunnel.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now plynth-mail-tunnel
+supabase secrets set MAIL_BRIDGE_TOKEN=<same token as the bridge .env>
+```
+
+The bridge also exposes `/api/push`, which relays ntfy.sh pushes from a home IP (ntfy.sh rate-limits
+Supabase's shared egress IPs). Resend's sandbox sender only delivers to the Resend account owner, so it
+is only a fallback; add a verified domain to `RESEND_FROM` to make it a real second transport.
